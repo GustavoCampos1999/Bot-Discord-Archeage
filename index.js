@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, PermissionsBitField, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -24,7 +24,7 @@ const CHECK_INTERVAL = 60 * 1000;
 const NAMES = { elu: 'Elu', trollei: 'Trollei', tock: 'Tock' };
 
 let state = {
-    sequence: ['elu', 'trollei', 'elu', 'tock'], // O ciclo customizável
+    sequence: ['elu', 'tock', 'elu', 'trollei'],
     cycleIndex: 0,
     rotation: 0, 
     finishTime: null,
@@ -32,7 +32,7 @@ let state = {
     panelMessageId: null,
     panelChannelId: null,
     rolePacksId: null,
-    users: { elu: null, trollei: null, tock: null }
+    users: { elu: '', trollei: '', tock: '' }
 };
 
 function loadData() {
@@ -41,7 +41,7 @@ function loadData() {
             const data = fs.readFileSync(DATA_FILE, 'utf8');
             state = { ...state, ...JSON.parse(data) };
             if (!state.sequence || state.sequence.length === 0) {
-                state.sequence = ['elu', 'trollei', 'elu', 'tock'];
+                state.sequence = ['elu', 'tock', 'elu', 'trollei'];
             }
         } catch (err) {
             console.error('Erro ao ler data.json:', err);
@@ -62,7 +62,18 @@ function formatTimeLeft(ms) {
 }
 
 function getMention(key) {
-    return state.users[key] ? state.users[key] : `**${NAMES[key] || key}**`;
+    if (state.users[key] && state.users[key].trim() !== '') {
+        return state.users[key];
+    }
+    return `**${NAMES[key] || key}**`;
+}
+
+function getRoleMention() {
+    if (state.rolePacksId && state.rolePacksId.trim() !== '') {
+        // Formata como cargo
+        return `<@&${state.rolePacksId}>`;
+    }
+    return '';
 }
 
 async function sendNewPanel(channel) {
@@ -119,12 +130,20 @@ async function sendNewPanel(channel) {
 
     rowButtons.addComponents(btnPlant);
 
-    // Botão de Forçar Vez sempre disponível (mas bloqueado para Admins no código de interação)
-    const btnChange = new ButtonBuilder()
-        .setCustomId('btn_mudar_vez')
-        .setLabel('Admin: Forçar Plantador Atual')
+    // Botões de Admin
+    if (state.rotation === 0) {
+        const btnChange = new ButtonBuilder()
+            .setCustomId('btn_mudar_vez')
+            .setLabel('Forçar Plantador Atual')
+            .setStyle(ButtonStyle.Secondary);
+        rowButtons.addComponents(btnChange);
+    }
+    
+    const btnConfig = new ButtonBuilder()
+        .setCustomId('btn_config')
+        .setLabel('⚙️ Configurações')
         .setStyle(ButtonStyle.Secondary);
-    rowButtons.addComponents(btnChange);
+    rowButtons.addComponents(btnConfig);
 
     const sentMessage = await channel.send({ embeds: [embed], components: [rowButtons] });
     
@@ -147,7 +166,6 @@ async function updatePanel(forceResend = false) {
         if (!channel) return;
 
         let shouldResend = forceResend;
-        
         if (!shouldResend) {
             const lastMessages = await channel.messages.fetch({ limit: 1 });
             const lastMsg = lastMessages.first();
@@ -220,11 +238,19 @@ async function updatePanel(forceResend = false) {
 
         rowButtons.addComponents(btnPlant);
 
-        const btnChange = new ButtonBuilder()
-            .setCustomId('btn_mudar_vez')
-            .setLabel('Admin: Forçar Plantador Atual')
+        if (state.rotation === 0) {
+            const btnChange = new ButtonBuilder()
+                .setCustomId('btn_mudar_vez')
+                .setLabel('Admin: Forçar Plantador Atual')
+                .setStyle(ButtonStyle.Secondary);
+            rowButtons.addComponents(btnChange);
+        }
+        
+        const btnConfig = new ButtonBuilder()
+            .setCustomId('btn_config')
+            .setLabel('⚙️ Configurações')
             .setStyle(ButtonStyle.Secondary);
-        rowButtons.addComponents(btnChange);
+        rowButtons.addComponents(btnConfig);
 
         await message.edit({ embeds: [embed], components: [rowButtons] });
     } catch (error) {
@@ -246,7 +272,7 @@ setInterval(async () => {
                     if (state.rotation === 1) {
                         await channel.send(`🔔 ${getMention(currentKey)}, seus packs da 1ª rotação estão prontos! Colha e replante.`);
                     } else if (state.rotation === 2) {
-                        const roleMention = state.rolePacksId ? `<@&${state.rolePacksId}>` : '';
+                        const roleMention = getRoleMention();
                         await channel.send(`🔔 ${getMention(currentKey)}, seus últimos packs estão prontos!\n\n${roleMention} Atenção ${getMention(nextKey)}: O terreno ficará livre em instantes!`);
                     }
                 }
@@ -271,27 +297,8 @@ client.on('messageCreate', async (message) => {
         return;
     }
 
-    // Configurações de tags
-    if (message.content.startsWith('!setrole')) {
-        const role = message.mentions.roles.first();
-        if (role) {
-            state.rolePacksId = role.id;
-            saveData();
-            message.reply(`Cargo @Packs configurado com sucesso: ${role.name}`);
-        }
-    } else if (message.content.startsWith('!setelu')) {
-        const match = message.content.match(/<@&?\d+>/);
-        if (match) { state.users.elu = match[0]; saveData(); message.reply(`Elu setado para: ${match[0]}`); }
-    } else if (message.content.startsWith('!settrollei')) {
-        const match = message.content.match(/<@&?\d+>/);
-        if (match) { state.users.trollei = match[0]; saveData(); message.reply(`Trollei setado para: ${match[0]}`); }
-    } else if (message.content.startsWith('!settock')) {
-        const match = message.content.match(/<@&?\d+>/);
-        if (match) { state.users.tock = match[0]; saveData(); message.reply(`Tock setado para: ${match[0]}`); }
-    } 
-    
-    // Comandos de Administrador
-    else if (message.content.startsWith('!admin_reset')) {
+    // Comandos de Administrador via Chat (Testes)
+    if (message.content.startsWith('!admin_reset')) {
         if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("🚫 Apenas Admins.");
         state.rotation = 0; state.finishTime = null; state.notified = false; saveData();
         updatePanel(true);
@@ -307,25 +314,6 @@ client.on('messageCreate', async (message) => {
         } else {
             message.reply("Não há packs plantados no momento para acelerar o tempo.");
         }
-    } else if (message.content.startsWith('!setordem')) {
-        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("🚫 Apenas Admins.");
-        const args = message.content.toLowerCase().split(' ').slice(1);
-        const validKeys = ['elu', 'trollei', 'tock'];
-        const newSequence = [];
-        
-        for (const arg of args) {
-            if (validKeys.includes(arg)) newSequence.push(arg);
-        }
-        
-        if (newSequence.length === 0) {
-            return message.reply("Uso correto: `!setordem elu trollei tock elu` (escreva os nomes na ordem desejada).");
-        }
-        
-        state.sequence = newSequence;
-        state.cycleIndex = 0; // reseta para o primeiro da nova ordem
-        saveData();
-        updatePanel(true);
-        message.reply(`✅ Nova ordem configurada com sucesso: **${newSequence.map(k => NAMES[k]).join(' ➔ ')}**`);
     }
 
     if (state.panelChannelId === message.channel.id) {
@@ -338,7 +326,7 @@ client.on('interactionCreate', async (interaction) => {
         if (interaction.customId === 'btn_plantar') {
             const currentKey = state.sequence[state.cycleIndex];
             const nextKey = state.sequence[(state.cycleIndex + 1) % state.sequence.length];
-            const roleMention = state.rolePacksId ? `<@&${state.rolePacksId}>` : '';
+            const roleMention = getRoleMention();
 
             if (state.rotation === 0) {
                 state.rotation = 1;
@@ -381,7 +369,7 @@ client.on('interactionCreate', async (interaction) => {
 
         if (interaction.customId === 'btn_mudar_vez') {
             if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-                return interaction.reply({ content: '🚫 Apenas administradores do servidor podem forçar a vez ou alterar a ordem.', ephemeral: true });
+                return interaction.reply({ content: '🚫 Acesso negado.', ephemeral: true });
             }
 
             const options = state.sequence.map((key, index) => {
@@ -392,7 +380,6 @@ client.on('interactionCreate', async (interaction) => {
                 };
             });
 
-            // O Discord tem limite de 25 opções no select menu, mas nossa lista dificilmente passará disso.
             const selectMenu = new StringSelectMenuBuilder()
                 .setCustomId('select_cycle')
                 .setPlaceholder('Escolha quem está assumindo AGORA')
@@ -406,6 +393,104 @@ client.on('interactionCreate', async (interaction) => {
                 ephemeral: true 
             });
         }
+        
+        if (interaction.customId === 'btn_config') {
+            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+                return interaction.reply({ content: '🚫 Acesso negado.', ephemeral: true });
+            }
+
+            const modal = new ModalBuilder()
+                .setCustomId('modal_config')
+                .setTitle('Configurações do Bot');
+
+            const orderInput = new TextInputBuilder()
+                .setCustomId('input_ordem')
+                .setLabel('Ordem da Rotação (espaços)')
+                .setStyle(TextInputStyle.Short)
+                .setPlaceholder('elu tock trollei elu')
+                .setValue(state.sequence.join(' '));
+
+            const packsInput = new TextInputBuilder()
+                .setCustomId('input_packs')
+                .setLabel('Cargo @Packs (copie o ID)')
+                .setStyle(TextInputStyle.Short)
+                .setRequired(false)
+                .setValue(state.rolePacksId || '');
+                
+            const eluInput = new TextInputBuilder()
+                .setCustomId('input_elu')
+                .setLabel('Tag do Elu (escreva exato: <@123>)')
+                .setStyle(TextInputStyle.Short)
+                .setRequired(false)
+                .setValue(state.users.elu || '');
+                
+            const trolleiInput = new TextInputBuilder()
+                .setCustomId('input_trollei')
+                .setLabel('Tag do Trollei')
+                .setStyle(TextInputStyle.Short)
+                .setRequired(false)
+                .setValue(state.users.trollei || '');
+                
+            const tockInput = new TextInputBuilder()
+                .setCustomId('input_tock')
+                .setLabel('Tag do Tock')
+                .setStyle(TextInputStyle.Short)
+                .setRequired(false)
+                .setValue(state.users.tock || '');
+
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(orderInput),
+                new ActionRowBuilder().addComponents(packsInput),
+                new ActionRowBuilder().addComponents(eluInput),
+                new ActionRowBuilder().addComponents(trolleiInput),
+                new ActionRowBuilder().addComponents(tockInput)
+            );
+
+            await interaction.showModal(modal);
+        }
+    }
+
+    if (interaction.isModalSubmit()) {
+        if (interaction.customId === 'modal_config') {
+            const rawOrdem = interaction.fields.getTextInputValue('input_ordem').toLowerCase();
+            const rawPacks = interaction.fields.getTextInputValue('input_packs');
+            const rawElu = interaction.fields.getTextInputValue('input_elu');
+            const rawTrollei = interaction.fields.getTextInputValue('input_trollei');
+            const rawTock = interaction.fields.getTextInputValue('input_tock');
+            
+            const validKeys = ['elu', 'trollei', 'tock'];
+            const newSequence = [];
+            for (const arg of rawOrdem.split(' ')) {
+                if (validKeys.includes(arg)) newSequence.push(arg);
+            }
+            if (newSequence.length > 0) {
+                state.sequence = newSequence;
+                state.cycleIndex = 0;
+            }
+
+            const extractRole = (str) => {
+                const match = str.match(/\d{17,19}/);
+                return match ? match[0] : str;
+            };
+
+            const extractMention = (str) => {
+                if (!str || str.trim() === '') return '';
+                const match = str.match(/<@&?\d+>/);
+                if (match) return match[0];
+                const idMatch = str.match(/\d{17,19}/);
+                if (idMatch) return `<@${idMatch[0]}>`; 
+                return str; // Fallback to raw text if no ID found
+            };
+
+            if (rawPacks !== undefined) state.rolePacksId = extractRole(rawPacks);
+            if (rawElu !== undefined) state.users.elu = extractMention(rawElu);
+            if (rawTrollei !== undefined) state.users.trollei = extractMention(rawTrollei);
+            if (rawTock !== undefined) state.users.tock = extractMention(rawTock);
+
+            saveData();
+            await interaction.reply({ content: '✅ Configurações salvas com sucesso! (O ciclo foi redefinido para o primeiro da lista).', ephemeral: true });
+            updatePanel(true);
+        }
     }
 
     if (interaction.isStringSelectMenu()) {
@@ -415,9 +500,6 @@ client.on('interactionCreate', async (interaction) => {
             }
             const index = parseInt(interaction.values[0]);
             state.cycleIndex = index;
-            
-            // Se o admin trocou a vez e estava no meio de um timer, talvez seja bom avisar ou zerar
-            // Mas vamos manter a lógica simples: ele só muda o nome do plantador atual
             saveData();
             
             const novo = state.sequence[index];
