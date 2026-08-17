@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, PermissionsBitField } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -21,10 +21,10 @@ const DATA_FILE = path.join(__dirname, 'data.json');
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 const CHECK_INTERVAL = 60 * 1000;
 
-const SEQUENCE = ['elu', 'trollei', 'elu', 'tock'];
 const NAMES = { elu: 'Elu', trollei: 'Trollei', tock: 'Tock' };
 
 let state = {
+    sequence: ['elu', 'trollei', 'elu', 'tock'], // O ciclo customizável
     cycleIndex: 0,
     rotation: 0, 
     finishTime: null,
@@ -40,6 +40,9 @@ function loadData() {
         try {
             const data = fs.readFileSync(DATA_FILE, 'utf8');
             state = { ...state, ...JSON.parse(data) };
+            if (!state.sequence || state.sequence.length === 0) {
+                state.sequence = ['elu', 'trollei', 'elu', 'tock'];
+            }
         } catch (err) {
             console.error('Erro ao ler data.json:', err);
         }
@@ -59,13 +62,13 @@ function formatTimeLeft(ms) {
 }
 
 function getMention(key) {
-    return state.users[key] ? `<@${state.users[key]}>` : `**${NAMES[key]}**`;
+    return state.users[key] ? state.users[key] : `**${NAMES[key] || key}**`;
 }
 
 async function sendNewPanel(channel) {
     const embed = new EmbedBuilder().setTitle('🌿 Rotação Automática de Packs').setColor('#2ecc71');
-    const currentKey = SEQUENCE[state.cycleIndex];
-    const nextKey = SEQUENCE[(state.cycleIndex + 1) % SEQUENCE.length];
+    const currentKey = state.sequence[state.cycleIndex];
+    const nextKey = state.sequence[(state.cycleIndex + 1) % state.sequence.length];
 
     if (state.rotation === 0) {
         embed.setDescription(`O terreno está **LIVRE**.\n\nA vez de plantar é de: ${getMention(currentKey)}`);
@@ -116,18 +119,15 @@ async function sendNewPanel(channel) {
 
     rowButtons.addComponents(btnPlant);
 
-    // Adiciona botão secundário de "Mudar Vez" apenas se o terreno estiver livre
-    if (state.rotation === 0) {
-        const btnChange = new ButtonBuilder()
-            .setCustomId('btn_mudar_vez')
-            .setLabel('Trocar / Forçar Plantador')
-            .setStyle(ButtonStyle.Secondary);
-        rowButtons.addComponents(btnChange);
-    }
+    // Botão de Forçar Vez sempre disponível (mas bloqueado para Admins no código de interação)
+    const btnChange = new ButtonBuilder()
+        .setCustomId('btn_mudar_vez')
+        .setLabel('Admin: Forçar Plantador Atual')
+        .setStyle(ButtonStyle.Secondary);
+    rowButtons.addComponents(btnChange);
 
     const sentMessage = await channel.send({ embeds: [embed], components: [rowButtons] });
     
-    // Apaga a mensagem antiga se existir
     if (state.panelMessageId && state.panelChannelId === channel.id) {
         try {
             const oldMsg = await channel.messages.fetch(state.panelMessageId).catch(() => null);
@@ -148,7 +148,6 @@ async function updatePanel(forceResend = false) {
 
         let shouldResend = forceResend;
         
-        // Verifica se o painel é a última mensagem do canal para não perder ele de vista (Sticky Message real)
         if (!shouldResend) {
             const lastMessages = await channel.messages.fetch({ limit: 1 });
             const lastMsg = lastMessages.first();
@@ -169,8 +168,8 @@ async function updatePanel(forceResend = false) {
         }
 
         const embed = new EmbedBuilder().setTitle('🌿 Rotação Automática de Packs').setColor('#2ecc71');
-        const currentKey = SEQUENCE[state.cycleIndex];
-        const nextKey = SEQUENCE[(state.cycleIndex + 1) % SEQUENCE.length];
+        const currentKey = state.sequence[state.cycleIndex];
+        const nextKey = state.sequence[(state.cycleIndex + 1) % state.sequence.length];
 
         if (state.rotation === 0) {
             embed.setDescription(`O terreno está **LIVRE**.\n\nA vez de plantar é de: ${getMention(currentKey)}`);
@@ -221,14 +220,11 @@ async function updatePanel(forceResend = false) {
 
         rowButtons.addComponents(btnPlant);
 
-        // Adiciona botão secundário de "Mudar Vez" apenas se o terreno estiver livre
-        if (state.rotation === 0) {
-            const btnChange = new ButtonBuilder()
-                .setCustomId('btn_mudar_vez')
-                .setLabel('Trocar / Forçar Plantador')
-                .setStyle(ButtonStyle.Secondary);
-            rowButtons.addComponents(btnChange);
-        }
+        const btnChange = new ButtonBuilder()
+            .setCustomId('btn_mudar_vez')
+            .setLabel('Admin: Forçar Plantador Atual')
+            .setStyle(ButtonStyle.Secondary);
+        rowButtons.addComponents(btnChange);
 
         await message.edit({ embeds: [embed], components: [rowButtons] });
     } catch (error) {
@@ -244,8 +240,8 @@ setInterval(async () => {
             try {
                 const channel = await client.channels.fetch(state.panelChannelId);
                 if (channel) {
-                    const currentKey = SEQUENCE[state.cycleIndex];
-                    const nextKey = SEQUENCE[(state.cycleIndex + 1) % SEQUENCE.length];
+                    const currentKey = state.sequence[state.cycleIndex];
+                    const nextKey = state.sequence[(state.cycleIndex + 1) % state.sequence.length];
                     
                     if (state.rotation === 1) {
                         await channel.send(`🔔 ${getMention(currentKey)}, seus packs da 1ª rotação estão prontos! Colha e replante.`);
@@ -275,6 +271,7 @@ client.on('messageCreate', async (message) => {
         return;
     }
 
+    // Configurações de tags
     if (message.content.startsWith('!setrole')) {
         const role = message.mentions.roles.first();
         if (role) {
@@ -283,21 +280,26 @@ client.on('messageCreate', async (message) => {
             message.reply(`Cargo @Packs configurado com sucesso: ${role.name}`);
         }
     } else if (message.content.startsWith('!setelu')) {
-        const user = message.mentions.users.first();
-        if (user) { state.users.elu = user.id; saveData(); message.reply(`Elu setado para: ${user.tag}`); }
+        const match = message.content.match(/<@&?\d+>/);
+        if (match) { state.users.elu = match[0]; saveData(); message.reply(`Elu setado para: ${match[0]}`); }
     } else if (message.content.startsWith('!settrollei')) {
-        const user = message.mentions.users.first();
-        if (user) { state.users.trollei = user.id; saveData(); message.reply(`Trollei setado para: ${user.tag}`); }
+        const match = message.content.match(/<@&?\d+>/);
+        if (match) { state.users.trollei = match[0]; saveData(); message.reply(`Trollei setado para: ${match[0]}`); }
     } else if (message.content.startsWith('!settock')) {
-        const user = message.mentions.users.first();
-        if (user) { state.users.tock = user.id; saveData(); message.reply(`Tock setado para: ${user.tag}`); }
-    } else if (message.content.startsWith('!admin_reset')) {
+        const match = message.content.match(/<@&?\d+>/);
+        if (match) { state.users.tock = match[0]; saveData(); message.reply(`Tock setado para: ${match[0]}`); }
+    } 
+    
+    // Comandos de Administrador
+    else if (message.content.startsWith('!admin_reset')) {
+        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("🚫 Apenas Admins.");
         state.rotation = 0; state.finishTime = null; state.notified = false; saveData();
         updatePanel(true);
         message.reply("Estado resetado para LIVRE.");
     } else if (message.content.startsWith('!test_fastforward')) {
+        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("🚫 Apenas Admins.");
         if (state.rotation > 0 && state.finishTime) {
-            state.finishTime = Date.now() + 10000; // 10 segundos
+            state.finishTime = Date.now() + 10000;
             state.notified = false;
             saveData();
             updatePanel(true);
@@ -305,9 +307,27 @@ client.on('messageCreate', async (message) => {
         } else {
             message.reply("Não há packs plantados no momento para acelerar o tempo.");
         }
+    } else if (message.content.startsWith('!setordem')) {
+        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("🚫 Apenas Admins.");
+        const args = message.content.toLowerCase().split(' ').slice(1);
+        const validKeys = ['elu', 'trollei', 'tock'];
+        const newSequence = [];
+        
+        for (const arg of args) {
+            if (validKeys.includes(arg)) newSequence.push(arg);
+        }
+        
+        if (newSequence.length === 0) {
+            return message.reply("Uso correto: `!setordem elu trollei tock elu` (escreva os nomes na ordem desejada).");
+        }
+        
+        state.sequence = newSequence;
+        state.cycleIndex = 0; // reseta para o primeiro da nova ordem
+        saveData();
+        updatePanel(true);
+        message.reply(`✅ Nova ordem configurada com sucesso: **${newSequence.map(k => NAMES[k]).join(' ➔ ')}**`);
     }
 
-    // Se alguém conversar no canal, garante que o painel desça
     if (state.panelChannelId === message.channel.id) {
         setTimeout(() => updatePanel(false), 1000);
     }
@@ -316,8 +336,8 @@ client.on('messageCreate', async (message) => {
 client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
         if (interaction.customId === 'btn_plantar') {
-            const currentKey = SEQUENCE[state.cycleIndex];
-            const nextKey = SEQUENCE[(state.cycleIndex + 1) % SEQUENCE.length];
+            const currentKey = state.sequence[state.cycleIndex];
+            const nextKey = state.sequence[(state.cycleIndex + 1) % state.sequence.length];
             const roleMention = state.rolePacksId ? `<@&${state.rolePacksId}>` : '';
 
             if (state.rotation === 0) {
@@ -348,7 +368,7 @@ client.on('interactionCreate', async (interaction) => {
                     return interaction.reply({ content: '🚫 Aguardando colheita.', ephemeral: true });
                 }
 
-                state.cycleIndex = (state.cycleIndex + 1) % SEQUENCE.length;
+                state.cycleIndex = (state.cycleIndex + 1) % state.sequence.length;
                 state.rotation = 1;
                 state.finishTime = Date.now() + THREE_DAYS_MS;
                 state.notified = false;
@@ -360,20 +380,28 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (interaction.customId === 'btn_mudar_vez') {
+            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+                return interaction.reply({ content: '🚫 Apenas administradores do servidor podem forçar a vez ou alterar a ordem.', ephemeral: true });
+            }
+
+            const options = state.sequence.map((key, index) => {
+                const nKey = state.sequence[(index + 1) % state.sequence.length];
+                return {
+                    label: `Passo ${index+1}: Vez do ${NAMES[key]} (Depois: ${NAMES[nKey]})`,
+                    value: index.toString()
+                };
+            });
+
+            // O Discord tem limite de 25 opções no select menu, mas nossa lista dificilmente passará disso.
             const selectMenu = new StringSelectMenuBuilder()
                 .setCustomId('select_cycle')
-                .setPlaceholder('Escolha a posição do ciclo atual')
-                .addOptions([
-                    { label: 'Vez do Elu (Próximo: Trollei)', value: '0' },
-                    { label: 'Vez do Trollei (Próximo: Elu)', value: '1' },
-                    { label: 'Vez do Elu (Próximo: Tock)', value: '2' },
-                    { label: 'Vez do Tock (Próximo: Elu)', value: '3' }
-                ]);
+                .setPlaceholder('Escolha quem está assumindo AGORA')
+                .addOptions(options.slice(0, 25));
 
             const row = new ActionRowBuilder().addComponents(selectMenu);
 
             await interaction.reply({ 
-                content: 'Altere manualmente quem deve ser o plantador de agora:', 
+                content: 'Altere manualmente quem deve ser o plantador de agora (pula os anteriores):', 
                 components: [row],
                 ephemeral: true 
             });
@@ -382,12 +410,18 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.isStringSelectMenu()) {
         if (interaction.customId === 'select_cycle') {
+            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+                return interaction.reply({ content: '🚫 Acesso negado.', ephemeral: true });
+            }
             const index = parseInt(interaction.values[0]);
             state.cycleIndex = index;
+            
+            // Se o admin trocou a vez e estava no meio de um timer, talvez seja bom avisar ou zerar
+            // Mas vamos manter a lógica simples: ele só muda o nome do plantador atual
             saveData();
             
-            const novo = SEQUENCE[index];
-            await interaction.update({ content: `✅ Vez alterada para: **${NAMES[novo]}**.`, components: [] });
+            const novo = state.sequence[index];
+            await interaction.update({ content: `✅ O plantador atual foi forçado para: **${NAMES[novo]}**.`, components: [] });
             updatePanel(true);
         }
     }
