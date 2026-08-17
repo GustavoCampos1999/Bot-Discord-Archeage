@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -25,8 +25,8 @@ const SEQUENCE = ['elu', 'trollei', 'elu', 'tock'];
 const NAMES = { elu: 'Elu', trollei: 'Trollei', tock: 'Tock' };
 
 let state = {
-    cycleIndex: 0, // 0=elu, 1=trollei, 2=elu, 3=tock
-    rotation: 0, // 0 (livre), 1 (plantado 1x), 2 (plantado 2x)
+    cycleIndex: 0,
+    rotation: 0, 
     finishTime: null,
     notified: false,
     panelMessageId: null,
@@ -64,7 +64,6 @@ function getMention(key) {
 
 async function sendNewPanel(channel) {
     const embed = new EmbedBuilder().setTitle('🌿 Rotação Automática de Packs').setColor('#2ecc71');
-
     const currentKey = SEQUENCE[state.cycleIndex];
     const nextKey = SEQUENCE[(state.cycleIndex + 1) % SEQUENCE.length];
 
@@ -117,11 +116,21 @@ async function sendNewPanel(channel) {
 
     rowButtons.addComponents(btnPlant);
 
+    // Adiciona botão secundário de "Mudar Vez" apenas se o terreno estiver livre
+    if (state.rotation === 0) {
+        const btnChange = new ButtonBuilder()
+            .setCustomId('btn_mudar_vez')
+            .setLabel('Trocar / Forçar Plantador')
+            .setStyle(ButtonStyle.Secondary);
+        rowButtons.addComponents(btnChange);
+    }
+
     const sentMessage = await channel.send({ embeds: [embed], components: [rowButtons] });
     
+    // Apaga a mensagem antiga se existir
     if (state.panelMessageId && state.panelChannelId === channel.id) {
         try {
-            const oldMsg = await channel.messages.fetch(state.panelMessageId);
+            const oldMsg = await channel.messages.fetch(state.panelMessageId).catch(() => null);
             if (oldMsg) await oldMsg.delete();
         } catch (e) {}
     }
@@ -134,10 +143,21 @@ async function sendNewPanel(channel) {
 async function updatePanel(forceResend = false) {
     if (!state.panelChannelId) return;
     try {
-        const channel = await client.channels.fetch(state.panelChannelId);
+        const channel = await client.channels.fetch(state.panelChannelId).catch(() => null);
         if (!channel) return;
 
-        if (forceResend) {
+        let shouldResend = forceResend;
+        
+        // Verifica se o painel é a última mensagem do canal para não perder ele de vista (Sticky Message real)
+        if (!shouldResend) {
+            const lastMessages = await channel.messages.fetch({ limit: 1 });
+            const lastMsg = lastMessages.first();
+            if (lastMsg && lastMsg.id !== state.panelMessageId) {
+                shouldResend = true;
+            }
+        }
+
+        if (shouldResend) {
             await sendNewPanel(channel);
             return;
         }
@@ -200,6 +220,16 @@ async function updatePanel(forceResend = false) {
         }
 
         rowButtons.addComponents(btnPlant);
+
+        // Adiciona botão secundário de "Mudar Vez" apenas se o terreno estiver livre
+        if (state.rotation === 0) {
+            const btnChange = new ButtonBuilder()
+                .setCustomId('btn_mudar_vez')
+                .setLabel('Trocar / Forçar Plantador')
+                .setStyle(ButtonStyle.Secondary);
+            rowButtons.addComponents(btnChange);
+        }
+
         await message.edit({ embeds: [embed], components: [rowButtons] });
     } catch (error) {
         console.error('Erro ao atualizar o painel:', error);
@@ -265,10 +295,21 @@ client.on('messageCreate', async (message) => {
         state.rotation = 0; state.finishTime = null; state.notified = false; saveData();
         updatePanel(true);
         message.reply("Estado resetado para LIVRE.");
+    } else if (message.content.startsWith('!test_fastforward')) {
+        if (state.rotation > 0 && state.finishTime) {
+            state.finishTime = Date.now() + 10000; // 10 segundos
+            state.notified = false;
+            saveData();
+            updatePanel(true);
+            message.reply("⏳ TESTE: O tempo foi acelerado! Os packs ficarão prontos em 10 segundos.");
+        } else {
+            message.reply("Não há packs plantados no momento para acelerar o tempo.");
+        }
     }
 
+    // Se alguém conversar no canal, garante que o painel desça
     if (state.panelChannelId === message.channel.id) {
-        setTimeout(() => updatePanel(true), 1000);
+        setTimeout(() => updatePanel(false), 1000);
     }
 });
 
@@ -280,7 +321,6 @@ client.on('interactionCreate', async (interaction) => {
             const roleMention = state.rolePacksId ? `<@&${state.rolePacksId}>` : '';
 
             if (state.rotation === 0) {
-                // Inicia 1ª rotacao
                 state.rotation = 1;
                 state.finishTime = Date.now() + THREE_DAYS_MS;
                 state.notified = false;
@@ -288,12 +328,9 @@ client.on('interactionCreate', async (interaction) => {
                 await interaction.reply({ content: `Packs plantados! Tempo iniciado: 3 dias.`, ephemeral: true });
             
             } else if (state.rotation === 1) {
-                // Bloqueio de segurança já no botão (disabled), mas conferimos denovo:
                 if (Date.now() < state.finishTime) {
                     return interaction.reply({ content: '🚫 Os packs ainda não estão prontos!', ephemeral: true });
                 }
-                
-                // Inicia 2ª rotacao e AVISA O PROXIMO
                 state.rotation = 2;
                 state.finishTime = Date.now() + THREE_DAYS_MS;
                 state.notified = false;
@@ -301,7 +338,6 @@ client.on('interactionCreate', async (interaction) => {
 
                 await interaction.reply({ content: `2ª Rotação iniciada! Avisando o próximo da fila.`, ephemeral: true });
                 
-                // Envia aviso no chat
                 const channel = interaction.channel;
                 if (channel) {
                     await channel.send(`${roleMention} 🚨 Alerta de Preparação: O ${NAMES[currentKey]} plantou a ÚLTIMA rotação dele. Em exatos 3 dias será a vez de ${getMention(nextKey)}! Já vão craftando os packs!`);
@@ -312,7 +348,6 @@ client.on('interactionCreate', async (interaction) => {
                     return interaction.reply({ content: '🚫 Aguardando colheita.', ephemeral: true });
                 }
 
-                // Passa o ciclo para a próxima pessoa que acabou de plantar
                 state.cycleIndex = (state.cycleIndex + 1) % SEQUENCE.length;
                 state.rotation = 1;
                 state.finishTime = Date.now() + THREE_DAYS_MS;
@@ -321,6 +356,38 @@ client.on('interactionCreate', async (interaction) => {
 
                 await interaction.reply({ content: `Packs plantados pela nova pessoa! Ciclo avançado.`, ephemeral: true });
             }
+            updatePanel(true);
+        }
+
+        if (interaction.customId === 'btn_mudar_vez') {
+            const selectMenu = new StringSelectMenuBuilder()
+                .setCustomId('select_cycle')
+                .setPlaceholder('Escolha a posição do ciclo atual')
+                .addOptions([
+                    { label: 'Vez do Elu (Próximo: Trollei)', value: '0' },
+                    { label: 'Vez do Trollei (Próximo: Elu)', value: '1' },
+                    { label: 'Vez do Elu (Próximo: Tock)', value: '2' },
+                    { label: 'Vez do Tock (Próximo: Elu)', value: '3' }
+                ]);
+
+            const row = new ActionRowBuilder().addComponents(selectMenu);
+
+            await interaction.reply({ 
+                content: 'Altere manualmente quem deve ser o plantador de agora:', 
+                components: [row],
+                ephemeral: true 
+            });
+        }
+    }
+
+    if (interaction.isStringSelectMenu()) {
+        if (interaction.customId === 'select_cycle') {
+            const index = parseInt(interaction.values[0]);
+            state.cycleIndex = index;
+            saveData();
+            
+            const novo = SEQUENCE[index];
+            await interaction.update({ content: `✅ Vez alterada para: **${NAMES[novo]}**.`, components: [] });
             updatePanel(true);
         }
     }
