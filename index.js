@@ -24,7 +24,7 @@ const CHECK_INTERVAL = 60 * 1000;
 const NAMES = { elu: 'Elu', trollei: 'Trollei', tock: 'Tock' };
 
 let state = {
-    sequence: ['elu', 'tock', 'elu', 'trollei'],
+    sequence: ['elu', 'trollei', 'elu', 'tock'],
     cycleIndex: 0,
     rotation: 0, 
     finishTime: null,
@@ -40,8 +40,8 @@ function loadData() {
         try {
             const data = fs.readFileSync(DATA_FILE, 'utf8');
             state = { ...state, ...JSON.parse(data) };
-            if (!state.sequence || state.sequence.length === 0) {
-                state.sequence = ['elu', 'tock', 'elu', 'trollei'];
+            if (!state.sequence || state.sequence.length !== 4) {
+                state.sequence = ['elu', 'trollei', 'elu', 'tock'];
             }
         } catch (err) {
             console.error('Erro ao ler data.json:', err);
@@ -70,16 +70,39 @@ function getMention(key) {
 
 function getRoleMention() {
     if (state.rolePacksId && state.rolePacksId.trim() !== '') {
-        // Formata como cargo
-        return `<@&${state.rolePacksId}>`;
+        return `<@&${state.rolePacksId.replace(/[<@&>]/g, '')}>`;
     }
     return '';
+}
+
+function getConfigComponents() {
+    const components = [];
+    for (let i = 0; i < 4; i++) {
+        const currentVal = state.sequence[i] || 'elu';
+        const menu = new StringSelectMenuBuilder()
+            .setCustomId(`set_cycle_${i}`)
+            .setPlaceholder(`Passo ${i + 1}`)
+            .addOptions([
+                { label: `Passo ${i + 1}: Elu`, value: 'elu', default: currentVal === 'elu' },
+                { label: `Passo ${i + 1}: Trollei`, value: 'trollei', default: currentVal === 'trollei' },
+                { label: `Passo ${i + 1}: Tock`, value: 'tock', default: currentVal === 'tock' }
+            ]);
+        components.push(new ActionRowBuilder().addComponents(menu));
+    }
+    
+    const btnTags = new ButtonBuilder()
+        .setCustomId('btn_edit_tags')
+        .setLabel('✏️ Editar Tags (@)')
+        .setStyle(ButtonStyle.Primary);
+        
+    components.push(new ActionRowBuilder().addComponents(btnTags));
+    return components;
 }
 
 async function sendNewPanel(channel) {
     const embed = new EmbedBuilder().setTitle('🌿 Rotação Automática de Packs').setColor('#2ecc71');
     const currentKey = state.sequence[state.cycleIndex];
-    const nextKey = state.sequence[(state.cycleIndex + 1) % state.sequence.length];
+    const nextKey = state.sequence[(state.cycleIndex + 1) % 4];
 
     if (state.rotation === 0) {
         embed.setDescription(`O terreno está **LIVRE**.\n\nA vez de plantar é de: ${getMention(currentKey)}`);
@@ -130,7 +153,6 @@ async function sendNewPanel(channel) {
 
     rowButtons.addComponents(btnPlant);
 
-    // Botões de Admin
     if (state.rotation === 0) {
         const btnChange = new ButtonBuilder()
             .setCustomId('btn_mudar_vez')
@@ -187,7 +209,7 @@ async function updatePanel(forceResend = false) {
 
         const embed = new EmbedBuilder().setTitle('🌿 Rotação Automática de Packs').setColor('#2ecc71');
         const currentKey = state.sequence[state.cycleIndex];
-        const nextKey = state.sequence[(state.cycleIndex + 1) % state.sequence.length];
+        const nextKey = state.sequence[(state.cycleIndex + 1) % 4];
 
         if (state.rotation === 0) {
             embed.setDescription(`O terreno está **LIVRE**.\n\nA vez de plantar é de: ${getMention(currentKey)}`);
@@ -267,7 +289,7 @@ setInterval(async () => {
                 const channel = await client.channels.fetch(state.panelChannelId);
                 if (channel) {
                     const currentKey = state.sequence[state.cycleIndex];
-                    const nextKey = state.sequence[(state.cycleIndex + 1) % state.sequence.length];
+                    const nextKey = state.sequence[(state.cycleIndex + 1) % 4];
                     
                     if (state.rotation === 1) {
                         await channel.send(`🔔 ${getMention(currentKey)}, seus packs da 1ª rotação estão prontos! Colha e replante.`);
@@ -297,7 +319,6 @@ client.on('messageCreate', async (message) => {
         return;
     }
 
-    // Comandos de Administrador via Chat (Testes)
     if (message.content.startsWith('!admin_reset')) {
         if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("🚫 Apenas Admins.");
         state.rotation = 0; state.finishTime = null; state.notified = false; saveData();
@@ -325,7 +346,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
         if (interaction.customId === 'btn_plantar') {
             const currentKey = state.sequence[state.cycleIndex];
-            const nextKey = state.sequence[(state.cycleIndex + 1) % state.sequence.length];
+            const nextKey = state.sequence[(state.cycleIndex + 1) % 4];
             const roleMention = getRoleMention();
 
             if (state.rotation === 0) {
@@ -356,7 +377,7 @@ client.on('interactionCreate', async (interaction) => {
                     return interaction.reply({ content: '🚫 Aguardando colheita.', ephemeral: true });
                 }
 
-                state.cycleIndex = (state.cycleIndex + 1) % state.sequence.length;
+                state.cycleIndex = (state.cycleIndex + 1) % 4;
                 state.rotation = 1;
                 state.finishTime = Date.now() + THREE_DAYS_MS;
                 state.notified = false;
@@ -373,7 +394,7 @@ client.on('interactionCreate', async (interaction) => {
             }
 
             const options = state.sequence.map((key, index) => {
-                const nKey = state.sequence[(index + 1) % state.sequence.length];
+                const nKey = state.sequence[(index + 1) % 4];
                 return {
                     label: `Passo ${index+1}: Vez do ${NAMES[key]} (Depois: ${NAMES[nKey]})`,
                     value: index.toString()
@@ -381,9 +402,9 @@ client.on('interactionCreate', async (interaction) => {
             });
 
             const selectMenu = new StringSelectMenuBuilder()
-                .setCustomId('select_cycle')
+                .setCustomId('select_cycle_index')
                 .setPlaceholder('Escolha quem está assumindo AGORA')
-                .addOptions(options.slice(0, 25));
+                .addOptions(options);
 
             const row = new ActionRowBuilder().addComponents(selectMenu);
 
@@ -399,47 +420,47 @@ client.on('interactionCreate', async (interaction) => {
                 return interaction.reply({ content: '🚫 Acesso negado.', ephemeral: true });
             }
 
+            await interaction.reply({
+                content: '**⚙️ Painel de Configurações**\nDefina quem planta em cada um dos 4 passos do ciclo (ele se repete infinitamente após o Passo 4):',
+                components: getConfigComponents(),
+                ephemeral: true
+            });
+        }
+        
+        if (interaction.customId === 'btn_edit_tags') {
             const modal = new ModalBuilder()
-                .setCustomId('modal_config')
-                .setTitle('Configurações do Bot');
-
-            const orderInput = new TextInputBuilder()
-                .setCustomId('input_ordem')
-                .setLabel('Ordem da Rotação (espaços)')
-                .setStyle(TextInputStyle.Short)
-                .setPlaceholder('elu tock trollei elu')
-                .setValue(state.sequence.join(' '));
+                .setCustomId('modal_tags')
+                .setTitle('Configurar Menções (@)');
 
             const packsInput = new TextInputBuilder()
                 .setCustomId('input_packs')
-                .setLabel('Cargo @Packs (copie o ID)')
+                .setLabel('Cargo @Packs (copie a Menção ou ID)')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(false)
                 .setValue(state.rolePacksId || '');
                 
             const eluInput = new TextInputBuilder()
                 .setCustomId('input_elu')
-                .setLabel('Tag do Elu (escreva exato: <@123>)')
+                .setLabel('Tag do Elu (copie a Menção ou ID)')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(false)
                 .setValue(state.users.elu || '');
                 
             const trolleiInput = new TextInputBuilder()
                 .setCustomId('input_trollei')
-                .setLabel('Tag do Trollei')
+                .setLabel('Tag do Trollei (copie a Menção ou ID)')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(false)
                 .setValue(state.users.trollei || '');
                 
             const tockInput = new TextInputBuilder()
                 .setCustomId('input_tock')
-                .setLabel('Tag do Tock')
+                .setLabel('Tag do Tock (copie a Menção ou ID)')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(false)
                 .setValue(state.users.tock || '');
 
             modal.addComponents(
-                new ActionRowBuilder().addComponents(orderInput),
                 new ActionRowBuilder().addComponents(packsInput),
                 new ActionRowBuilder().addComponents(eluInput),
                 new ActionRowBuilder().addComponents(trolleiInput),
@@ -450,25 +471,44 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
+    if (interaction.isStringSelectMenu()) {
+        if (interaction.customId.startsWith('set_cycle_')) {
+            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
+            
+            // "set_cycle_0" -> 0
+            const step = parseInt(interaction.customId.split('_')[2]);
+            const selected = interaction.values[0];
+            
+            state.sequence[step] = selected;
+            saveData();
+            
+            await interaction.update({ components: getConfigComponents() });
+            updatePanel(true);
+        }
+        
+        if (interaction.customId === 'select_cycle_index') {
+            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+                return interaction.reply({ content: '🚫 Acesso negado.', ephemeral: true });
+            }
+            const index = parseInt(interaction.values[0]);
+            state.cycleIndex = index;
+            saveData();
+            
+            const novo = state.sequence[index];
+            await interaction.update({ content: `✅ O plantador atual foi forçado para: **${NAMES[novo]}**.`, components: [] });
+            updatePanel(true);
+        }
+    }
+
     if (interaction.isModalSubmit()) {
-        if (interaction.customId === 'modal_config') {
-            const rawOrdem = interaction.fields.getTextInputValue('input_ordem').toLowerCase();
+        if (interaction.customId === 'modal_tags') {
             const rawPacks = interaction.fields.getTextInputValue('input_packs');
             const rawElu = interaction.fields.getTextInputValue('input_elu');
             const rawTrollei = interaction.fields.getTextInputValue('input_trollei');
             const rawTock = interaction.fields.getTextInputValue('input_tock');
-            
-            const validKeys = ['elu', 'trollei', 'tock'];
-            const newSequence = [];
-            for (const arg of rawOrdem.split(' ')) {
-                if (validKeys.includes(arg)) newSequence.push(arg);
-            }
-            if (newSequence.length > 0) {
-                state.sequence = newSequence;
-                state.cycleIndex = 0;
-            }
 
             const extractRole = (str) => {
+                if (!str || str.trim() === '') return '';
                 const match = str.match(/\d{17,19}/);
                 return match ? match[0] : str;
             };
@@ -479,31 +519,16 @@ client.on('interactionCreate', async (interaction) => {
                 if (match) return match[0];
                 const idMatch = str.match(/\d{17,19}/);
                 if (idMatch) return `<@${idMatch[0]}>`; 
-                return str; // Fallback to raw text if no ID found
+                return str; 
             };
 
-            if (rawPacks !== undefined) state.rolePacksId = extractRole(rawPacks);
-            if (rawElu !== undefined) state.users.elu = extractMention(rawElu);
-            if (rawTrollei !== undefined) state.users.trollei = extractMention(rawTrollei);
-            if (rawTock !== undefined) state.users.tock = extractMention(rawTock);
+            state.rolePacksId = extractRole(rawPacks);
+            state.users.elu = extractMention(rawElu);
+            state.users.trollei = extractMention(rawTrollei);
+            state.users.tock = extractMention(rawTock);
 
             saveData();
-            await interaction.reply({ content: '✅ Configurações salvas com sucesso! (O ciclo foi redefinido para o primeiro da lista).', ephemeral: true });
-            updatePanel(true);
-        }
-    }
-
-    if (interaction.isStringSelectMenu()) {
-        if (interaction.customId === 'select_cycle') {
-            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-                return interaction.reply({ content: '🚫 Acesso negado.', ephemeral: true });
-            }
-            const index = parseInt(interaction.values[0]);
-            state.cycleIndex = index;
-            saveData();
-            
-            const novo = state.sequence[index];
-            await interaction.update({ content: `✅ O plantador atual foi forçado para: **${NAMES[novo]}**.`, components: [] });
+            await interaction.reply({ content: '✅ Tags salvas com sucesso!', ephemeral: true });
             updatePanel(true);
         }
     }
