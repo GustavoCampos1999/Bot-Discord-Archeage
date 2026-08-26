@@ -153,17 +153,15 @@ async function sendNewPanel(channel) {
 
     rowButtons.addComponents(btnPlant);
 
-    if (state.rotation === 0) {
-        const btnChange = new ButtonBuilder()
-            .setCustomId('btn_mudar_vez')
-            .setLabel('Forçar Plantador Atual')
-            .setStyle(ButtonStyle.Secondary);
-        rowButtons.addComponents(btnChange);
-    }
+    const btnChange = new ButtonBuilder()
+        .setCustomId('btn_mudar_vez')
+        .setLabel('🛠️ Alterar Passo Atual')
+        .setStyle(ButtonStyle.Secondary);
+    rowButtons.addComponents(btnChange);
     
     const btnConfig = new ButtonBuilder()
         .setCustomId('btn_config')
-        .setLabel('⚙️ Configurações')
+        .setLabel('⚙️ Configurações (Apenas p/ mudar a regra)')
         .setStyle(ButtonStyle.Secondary);
     rowButtons.addComponents(btnConfig);
 
@@ -260,17 +258,15 @@ async function updatePanel(forceResend = false) {
 
         rowButtons.addComponents(btnPlant);
 
-        if (state.rotation === 0) {
-            const btnChange = new ButtonBuilder()
-                .setCustomId('btn_mudar_vez')
-                .setLabel('Admin: Forçar Plantador Atual')
-                .setStyle(ButtonStyle.Secondary);
-            rowButtons.addComponents(btnChange);
-        }
+        const btnChange = new ButtonBuilder()
+            .setCustomId('btn_mudar_vez')
+            .setLabel('🛠️ Alterar Passo Atual')
+            .setStyle(ButtonStyle.Secondary);
+        rowButtons.addComponents(btnChange);
         
         const btnConfig = new ButtonBuilder()
             .setCustomId('btn_config')
-            .setLabel('⚙️ Configurações')
+            .setLabel('⚙️ Configurações (Apenas p/ mudar a regra)')
             .setStyle(ButtonStyle.Secondary);
         rowButtons.addComponents(btnConfig);
 
@@ -335,6 +331,22 @@ client.on('messageCreate', async (message) => {
         } else {
             message.reply("Não há packs plantados no momento para acelerar o tempo.");
         }
+    } else if (message.content.startsWith('!set_tempo')) {
+        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("🚫 Apenas Admins.");
+        const args = message.content.split(' ');
+        if (args.length < 2 || isNaN(args[1])) {
+            return message.reply("⚠️ Uso correto: `!set_tempo 52` (para definir que faltam exatamente 52 horas).");
+        }
+        if (state.rotation === 0 || !state.finishTime) {
+            return message.reply("O terreno está livre, não há plantação ativa para ajustar o tempo.");
+        }
+        
+        const horas = parseFloat(args[1]);
+        state.finishTime = Date.now() + (horas * 60 * 60 * 1000);
+        state.notified = false;
+        saveData();
+        updatePanel(true);
+        message.reply(`✅ O timer foi ajustado na mão! Agora faltam exatamente **${horas} horas** para a colheita ficar pronta.`);
     }
 
     if (state.panelChannelId === message.channel.id) {
