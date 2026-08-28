@@ -75,6 +75,21 @@ function getRoleMention() {
     return '';
 }
 
+async function sendDM(mentionString, messageText) {
+    if (!mentionString) return;
+    const match = mentionString.match(/\d{17,19}/);
+    if (!match) return; // Não encontrou um ID numérico válido
+    try {
+        const userId = match[0];
+        const user = await client.users.fetch(userId).catch(() => null);
+        if (user) {
+            await user.send(messageText).catch(() => null);
+        }
+    } catch (err) {
+        console.log("Falha ao enviar DM para", mentionString);
+    }
+}
+
 function getConfigComponents() {
     const components = [];
     for (let i = 0; i < 4; i++) {
@@ -289,9 +304,13 @@ setInterval(async () => {
                     
                     if (state.rotation === 1) {
                         await channel.send(`🔔 ${getMention(currentKey)}, seus packs da 1ª rotação estão prontos! Colha e replante.`);
+                        await sendDM(state.users[currentKey], `🌿 **Alerta do ArcheAge:**\nSeus packs da 1ª rotação estão PRONTOS! Vá lá colher e replantar a última leva.`);
                     } else if (state.rotation === 2) {
                         const roleMention = getRoleMention();
                         await channel.send(`🔔 ${getMention(currentKey)}, seus últimos packs estão prontos!\n\n${roleMention} Atenção ${getMention(nextKey)}: O terreno ficará livre em instantes!`);
+                        
+                        await sendDM(state.users[currentKey], `🌿 **Alerta do ArcheAge:**\nSeus ÚLTIMOS packs estão PRONTOS! Vá lá colher e liberar o terreno.`);
+                        await sendDM(state.users[nextKey], `🚨 **Prepare-se!**\nO terreno ficará livre em instantes! Já pode ir finalizando seus packs para plantar.`);
                     }
                 }
             } catch (err) {}
@@ -384,6 +403,8 @@ client.on('interactionCreate', async (interaction) => {
                     await channel.send(`${roleMention} 🚨 Alerta de Preparação: O ${NAMES[currentKey]} plantou a ÚLTIMA rotação dele. Em exatos 3 dias será a vez de ${getMention(nextKey)}! Já vão craftando os packs!`);
                 }
                 
+                await sendDM(state.users[nextKey], `🚨 **Alerta de Preparação (ArcheAge)!**\nO ${NAMES[currentKey]} acabou de plantar a ÚLTIMA rotação dele. Em exatos 3 dias será a SUA VEZ de plantar!`);
+                
             } else if (state.rotation === 2) {
                 if (Date.now() < state.finishTime) {
                     return interaction.reply({ content: '🚫 Aguardando colheita.', ephemeral: true });
@@ -442,32 +463,32 @@ client.on('interactionCreate', async (interaction) => {
         if (interaction.customId === 'btn_edit_tags') {
             const modal = new ModalBuilder()
                 .setCustomId('modal_tags')
-                .setTitle('Configurar Menções (@)');
+                .setTitle('Configurar Menções (IDs numéricos)');
 
             const packsInput = new TextInputBuilder()
                 .setCustomId('input_packs')
-                .setLabel('Cargo @Packs (copie a Menção ou ID)')
+                .setLabel('Cargo @Packs (Copie e cole APENAS O NÚMERO)')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(false)
                 .setValue(state.rolePacksId || '');
                 
             const eluInput = new TextInputBuilder()
                 .setCustomId('input_elu')
-                .setLabel('Tag do Elu (copie a Menção ou ID)')
+                .setLabel('ID do Elu (Copie e cole APENAS O NÚMERO)')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(false)
                 .setValue(state.users.elu || '');
                 
             const trolleiInput = new TextInputBuilder()
                 .setCustomId('input_trollei')
-                .setLabel('Tag do Trollei (copie a Menção ou ID)')
+                .setLabel('ID do Trollei (APENAS NÚMERO)')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(false)
                 .setValue(state.users.trollei || '');
                 
             const tockInput = new TextInputBuilder()
                 .setCustomId('input_tock')
-                .setLabel('Tag do Tock (copie a Menção ou ID)')
+                .setLabel('ID do Tock (APENAS NÚMERO)')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(false)
                 .setValue(state.users.tock || '');
@@ -527,10 +548,8 @@ client.on('interactionCreate', async (interaction) => {
 
             const extractMention = (str) => {
                 if (!str || str.trim() === '') return '';
-                const match = str.match(/<@&?\d+>/);
-                if (match) return match[0];
-                const idMatch = str.match(/\d{17,19}/);
-                if (idMatch) return `<@${idMatch[0]}>`; 
+                const match = str.match(/\d{17,19}/);
+                if (match) return `<@${match[0]}>`; 
                 return str; 
             };
 
@@ -540,7 +559,7 @@ client.on('interactionCreate', async (interaction) => {
             state.users.tock = extractMention(rawTock);
 
             saveData();
-            await interaction.reply({ content: '✅ Tags salvas com sucesso!', ephemeral: true });
+            await interaction.reply({ content: '✅ Tags numéricas salvas com sucesso!', ephemeral: true });
             updatePanel(true);
         }
     }
