@@ -26,7 +26,7 @@ const NAMES = { elu: 'Elu', trollei: 'Trollei', tock: 'Tock' };
 let state = {
     sequence: ['elu', 'trollei', 'elu', 'tock'],
     cycleIndex: 0,
-    rotation: 0, 
+    rotation: 0, // 0 = Livre, 1 = 1/2, 2 = 2/2
     finishTime: null,
     notified: false,
     panelMessageId: null,
@@ -78,16 +78,14 @@ function getRoleMention() {
 async function sendDM(mentionString, messageText) {
     if (!mentionString) return;
     const match = mentionString.match(/\d{17,19}/);
-    if (!match) return; // Não encontrou um ID numérico válido
+    if (!match) return;
     try {
         const userId = match[0];
         const user = await client.users.fetch(userId).catch(() => null);
         if (user) {
             await user.send(messageText).catch(() => null);
         }
-    } catch (err) {
-        console.log("Falha ao enviar DM para", mentionString);
-    }
+    } catch (err) {}
 }
 
 function getConfigComponents() {
@@ -104,13 +102,6 @@ function getConfigComponents() {
             ]);
         components.push(new ActionRowBuilder().addComponents(menu));
     }
-    
-    const btnTags = new ButtonBuilder()
-        .setCustomId('btn_edit_tags')
-        .setLabel('✏️ Editar Tags (@)')
-        .setStyle(ButtonStyle.Primary);
-        
-    components.push(new ActionRowBuilder().addComponents(btnTags));
     return components;
 }
 
@@ -127,9 +118,9 @@ async function sendNewPanel(channel) {
         let statusText = '';
         if (Date.now() >= state.finishTime) {
             if (state.rotation === 1) {
-                statusText = `✅ **PRONTOS PARA COLHER!**\nColha os packs e clique em Re-plantei para a sua última leva.`;
+                statusText = `✅ **PRONTOS PARA COLHER (1/2)!**\nColha os packs e clique em Re-plantei.`;
             } else {
-                statusText = `✅ **PRONTOS PARA COLHER (Última Rotação)!**\nColha os packs. O terreno ficará livre para ${getMention(nextKey)} plantar.`;
+                statusText = `✅ **PRONTOS PARA COLHER (2/2)!**\nColha os últimos packs e libere o terreno.`;
             }
             embed.setColor('#e74c3c');
         } else {
@@ -137,32 +128,26 @@ async function sendNewPanel(channel) {
             statusText = `⏳ **Tempo restante exato:** ${timeLeft}\nFicam prontos em: <t:${timestamp}:R>\n(Data exata: <t:${timestamp}:f>)`;
         }
         
-        let proxAviso = '';
-        if (state.rotation === 2) {
-            proxAviso = `\n\n👉 **Próximo da vez:** ${getMention(nextKey)} (Já foi avisado!)`;
-        }
-
+        let proxAviso = `\n\n👉 **Próximo da vez:** ${getMention(nextKey)}`;
         embed.setDescription(`**Plantador Atual:** ${getMention(currentKey)}\n**Rotação:** ${state.rotation} de 2\n\n${statusText}${proxAviso}`);
     }
 
     const rowButtons = new ActionRowBuilder();
-    const btnPlant = new ButtonBuilder()
-        .setCustomId('btn_plantar')
-        .setStyle(ButtonStyle.Success);
+    const btnPlant = new ButtonBuilder().setCustomId('btn_plantar');
 
     if (state.rotation === 0) {
-        btnPlant.setLabel(`Plantei Packs (Sou o ${NAMES[currentKey]})`);
+        btnPlant.setLabel(`Plantei Packs (Sou o ${NAMES[currentKey]})`).setStyle(ButtonStyle.Success);
     } else if (state.rotation === 1) {
         if (Date.now() < state.finishTime) {
-            btnPlant.setLabel('Aguarde o tempo para Re-plantar').setDisabled(true);
+            btnPlant.setLabel('Aguardando 1ª Colheita...').setStyle(ButtonStyle.Secondary).setDisabled(true);
         } else {
-            btnPlant.setLabel('Re-plantei (Última Rotação)').setDisabled(false);
+            btnPlant.setLabel('Colhi e Re-plantei (Ir p/ 2/2)').setStyle(ButtonStyle.Success).setDisabled(false);
         }
     } else if (state.rotation === 2) {
         if (Date.now() < state.finishTime) {
-            btnPlant.setLabel('Aguardando Colheita...').setDisabled(true);
+            btnPlant.setLabel('Aguardando 2ª Colheita...').setStyle(ButtonStyle.Secondary).setDisabled(true);
         } else {
-            btnPlant.setLabel(`Plantei Packs (Iniciar vez de ${NAMES[nextKey]})`).setDisabled(false);
+            btnPlant.setLabel('Colhi Tudo (Liberar Terreno)').setStyle(ButtonStyle.Primary).setDisabled(false);
         }
     }
 
@@ -170,15 +155,15 @@ async function sendNewPanel(channel) {
 
     const btnChange = new ButtonBuilder()
         .setCustomId('btn_mudar_vez')
-        .setLabel('🛠️ Alterar Passo Atual')
+        .setLabel('Trocar Plantador Atual')
         .setStyle(ButtonStyle.Secondary);
     rowButtons.addComponents(btnChange);
     
-    const btnConfig = new ButtonBuilder()
-        .setCustomId('btn_config')
-        .setLabel('⚙️ Configurações (Apenas p/ mudar a regra)')
-        .setStyle(ButtonStyle.Secondary);
-    rowButtons.addComponents(btnConfig);
+    const btnAdmin = new ButtonBuilder()
+        .setCustomId('btn_admin')
+        .setLabel('🛠️ Admin')
+        .setStyle(ButtonStyle.Danger);
+    rowButtons.addComponents(btnAdmin);
 
     const sentMessage = await channel.send({ embeds: [embed], components: [rowButtons] });
     
@@ -232,9 +217,9 @@ async function updatePanel(forceResend = false) {
             let statusText = '';
             if (Date.now() >= state.finishTime) {
                 if (state.rotation === 1) {
-                    statusText = `✅ **PRONTOS PARA COLHER!**\nColha os packs e clique em Re-plantei para a sua última leva.`;
+                    statusText = `✅ **PRONTOS PARA COLHER (1/2)!**\nColha os packs e clique em Re-plantei.`;
                 } else {
-                    statusText = `✅ **PRONTOS PARA COLHER (Última Rotação)!**\nColha os packs. O terreno ficará livre para ${getMention(nextKey)} plantar.`;
+                    statusText = `✅ **PRONTOS PARA COLHER (2/2)!**\nColha os últimos packs e libere o terreno.`;
                 }
                 embed.setColor('#e74c3c');
             } else {
@@ -242,32 +227,26 @@ async function updatePanel(forceResend = false) {
                 statusText = `⏳ **Tempo restante exato:** ${timeLeft}\nFicam prontos em: <t:${timestamp}:R>\n(Data exata: <t:${timestamp}:f>)`;
             }
             
-            let proxAviso = '';
-            if (state.rotation === 2) {
-                proxAviso = `\n\n👉 **Próximo da vez:** ${getMention(nextKey)} (Já foi avisado!)`;
-            }
-
+            let proxAviso = `\n\n👉 **Próximo da vez:** ${getMention(nextKey)}`;
             embed.setDescription(`**Plantador Atual:** ${getMention(currentKey)}\n**Rotação:** ${state.rotation} de 2\n\n${statusText}${proxAviso}`);
         }
 
         const rowButtons = new ActionRowBuilder();
-        const btnPlant = new ButtonBuilder()
-            .setCustomId('btn_plantar')
-            .setStyle(ButtonStyle.Success);
+        const btnPlant = new ButtonBuilder().setCustomId('btn_plantar');
 
         if (state.rotation === 0) {
-            btnPlant.setLabel(`Plantei Packs (Sou o ${NAMES[currentKey]})`);
+            btnPlant.setLabel(`Plantei Packs (Sou o ${NAMES[currentKey]})`).setStyle(ButtonStyle.Success);
         } else if (state.rotation === 1) {
             if (Date.now() < state.finishTime) {
-                btnPlant.setLabel('Aguarde o tempo para Re-plantar').setDisabled(true);
+                btnPlant.setLabel('Aguardando 1ª Colheita...').setStyle(ButtonStyle.Secondary).setDisabled(true);
             } else {
-                btnPlant.setLabel('Re-plantei (Última Rotação)').setDisabled(false);
+                btnPlant.setLabel('Colhi e Re-plantei (Ir p/ 2/2)').setStyle(ButtonStyle.Success).setDisabled(false);
             }
         } else if (state.rotation === 2) {
             if (Date.now() < state.finishTime) {
-                btnPlant.setLabel('Aguardando Colheita...').setDisabled(true);
+                btnPlant.setLabel('Aguardando 2ª Colheita...').setStyle(ButtonStyle.Secondary).setDisabled(true);
             } else {
-                btnPlant.setLabel(`Plantei Packs (Iniciar vez de ${NAMES[nextKey]})`).setDisabled(false);
+                btnPlant.setLabel('Colhi Tudo (Liberar Terreno)').setStyle(ButtonStyle.Primary).setDisabled(false);
             }
         }
 
@@ -275,15 +254,15 @@ async function updatePanel(forceResend = false) {
 
         const btnChange = new ButtonBuilder()
             .setCustomId('btn_mudar_vez')
-            .setLabel('🛠️ Alterar Passo Atual')
+            .setLabel('Trocar Plantador Atual')
             .setStyle(ButtonStyle.Secondary);
         rowButtons.addComponents(btnChange);
         
-        const btnConfig = new ButtonBuilder()
-            .setCustomId('btn_config')
-            .setLabel('⚙️ Configurações (Apenas p/ mudar a regra)')
-            .setStyle(ButtonStyle.Secondary);
-        rowButtons.addComponents(btnConfig);
+        const btnAdmin = new ButtonBuilder()
+            .setCustomId('btn_admin')
+            .setLabel('🛠️ Admin')
+            .setStyle(ButtonStyle.Danger);
+        rowButtons.addComponents(btnAdmin);
 
         await message.edit({ embeds: [embed], components: [rowButtons] });
     } catch (error) {
@@ -334,40 +313,6 @@ client.on('messageCreate', async (message) => {
         return;
     }
 
-    if (message.content.startsWith('!admin_reset')) {
-        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("🚫 Apenas Admins.");
-        state.rotation = 0; state.finishTime = null; state.notified = false; saveData();
-        updatePanel(true);
-        message.reply("Estado resetado para LIVRE.");
-    } else if (message.content.startsWith('!test_fastforward')) {
-        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("🚫 Apenas Admins.");
-        if (state.rotation > 0 && state.finishTime) {
-            state.finishTime = Date.now() + 10000;
-            state.notified = false;
-            saveData();
-            updatePanel(true);
-            message.reply("⏳ TESTE: O tempo foi acelerado! Os packs ficarão prontos em 10 segundos.");
-        } else {
-            message.reply("Não há packs plantados no momento para acelerar o tempo.");
-        }
-    } else if (message.content.startsWith('!set_tempo')) {
-        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply("🚫 Apenas Admins.");
-        const args = message.content.split(' ');
-        if (args.length < 2 || isNaN(args[1])) {
-            return message.reply("⚠️ Uso correto: `!set_tempo 52` (para definir que faltam exatamente 52 horas).");
-        }
-        if (state.rotation === 0 || !state.finishTime) {
-            return message.reply("O terreno está livre, não há plantação ativa para ajustar o tempo.");
-        }
-        
-        const horas = parseFloat(args[1]);
-        state.finishTime = Date.now() + (horas * 60 * 60 * 1000);
-        state.notified = false;
-        saveData();
-        updatePanel(true);
-        message.reply(`✅ O timer foi ajustado na mão! Agora faltam exatamente **${horas} horas** para a colheita ficar pronta.`);
-    }
-
     if (state.panelChannelId === message.channel.id) {
         setTimeout(() => updatePanel(false), 1000);
     }
@@ -411,87 +356,114 @@ client.on('interactionCreate', async (interaction) => {
                 }
 
                 state.cycleIndex = (state.cycleIndex + 1) % 4;
-                state.rotation = 1;
-                state.finishTime = Date.now() + THREE_DAYS_MS;
+                state.rotation = 0;
+                state.finishTime = null;
                 state.notified = false;
                 saveData();
 
-                await interaction.reply({ content: `Packs plantados pela nova pessoa! Ciclo avançado.`, ephemeral: true });
+                await interaction.reply({ content: `Terreno liberado! O próximo foi notificado.`, ephemeral: true });
+                
+                const channel = interaction.channel;
+                if (channel) {
+                    await channel.send(`✅ O terreno foi liberado por ${NAMES[currentKey]}! Agora é a vez de ${getMention(nextKey)} plantar.\n*(Se precisar trocar a pessoa, use o botão "Trocar Plantador Atual")*`);
+                }
+                await sendDM(state.users[nextKey], `🚨 **O Terreno está LIVRE!**\nO ${NAMES[currentKey]} terminou a colheita. É a sua vez de plantar!`);
             }
             updatePanel(true);
         }
 
         if (interaction.customId === 'btn_mudar_vez') {
-            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-                return interaction.reply({ content: '🚫 Acesso negado.', ephemeral: true });
-            }
-
-            const options = state.sequence.map((key, index) => {
-                const nKey = state.sequence[(index + 1) % 4];
-                return {
-                    label: `Passo ${index+1}: Vez do ${NAMES[key]} (Depois: ${NAMES[nKey]})`,
-                    value: index.toString()
-                };
-            });
-
             const selectMenu = new StringSelectMenuBuilder()
-                .setCustomId('select_cycle_index')
-                .setPlaceholder('Escolha quem está assumindo AGORA')
-                .addOptions(options);
+                .setCustomId('select_membro_direto')
+                .setPlaceholder('Escolha quem vai assumir o terreno agora')
+                .addOptions([
+                    { label: 'Elu', value: 'elu' },
+                    { label: 'Trollei', value: 'trollei' },
+                    { label: 'Tock', value: 'tock' }
+                ]);
 
             const row = new ActionRowBuilder().addComponents(selectMenu);
 
             await interaction.reply({ 
-                content: 'Altere manualmente quem deve ser o plantador de agora (pula os anteriores):', 
+                content: 'Selecione quem é o plantador ATUAL (isso não afeta as regras do ciclo):', 
                 components: [row],
                 ephemeral: true 
             });
         }
         
-        if (interaction.customId === 'btn_config') {
+        if (interaction.customId === 'btn_admin') {
             if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
                 return interaction.reply({ content: '🚫 Acesso negado.', ephemeral: true });
             }
 
+            const row1 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('admin_ajustar_tempo').setLabel('⏳ Ajustar Horas').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('admin_reset').setLabel('🛑 Zerar Terreno').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('admin_fastforward').setLabel('⏩ Teste (10s)').setStyle(ButtonStyle.Secondary)
+            );
+            const row2 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('btn_config_ciclo').setLabel('⚙️ Editar Ordem do Ciclo').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('btn_edit_tags').setLabel('🏷️ Editar IDs das Tags').setStyle(ButtonStyle.Secondary)
+            );
+
             await interaction.reply({
-                content: '**⚙️ Painel de Configurações**\nDefina quem planta em cada um dos 4 passos do ciclo (ele se repete infinitamente após o Passo 4):',
+                content: '**🛠️ Painel de Administração**\n*(Todos os comandos antigos foram transformados nesses botões para facilitar)*',
+                components: [row1, row2],
+                ephemeral: true
+            });
+        }
+
+        if (interaction.customId === 'admin_fastforward') {
+            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
+            if (state.rotation > 0 && state.finishTime) {
+                state.finishTime = Date.now() + 10000;
+                state.notified = false;
+                saveData();
+                updatePanel(true);
+                await interaction.reply({ content: "⏳ TESTE: O tempo foi acelerado para 10 segundos.", ephemeral: true });
+            } else {
+                await interaction.reply({ content: "Não há packs plantados no momento.", ephemeral: true });
+            }
+        }
+
+        if (interaction.customId === 'admin_reset') {
+            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
+            state.rotation = 0; state.finishTime = null; state.notified = false; saveData();
+            updatePanel(true);
+            await interaction.reply({ content: "🛑 Estado resetado para LIVRE.", ephemeral: true });
+        }
+
+        if (interaction.customId === 'admin_ajustar_tempo') {
+            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
+            const modal = new ModalBuilder().setCustomId('modal_tempo').setTitle('Ajustar Tempo Restante');
+            const input = new TextInputBuilder()
+                .setCustomId('input_horas')
+                .setLabel('Quantas horas faltam? (Ex: 52 ou 2.5)')
+                .setStyle(TextInputStyle.Short)
+                .setRequired(true);
+            modal.addComponents(new ActionRowBuilder().addComponents(input));
+            await interaction.showModal(modal);
+        }
+
+        if (interaction.customId === 'btn_config_ciclo') {
+            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
+            await interaction.reply({
+                content: '**⚙️ Editar Ordem do Ciclo**\nDefina quem planta em cada um dos 4 passos (o ciclo se repete infinitamente):',
                 components: getConfigComponents(),
                 ephemeral: true
             });
         }
-        
+
         if (interaction.customId === 'btn_edit_tags') {
+            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
             const modal = new ModalBuilder()
                 .setCustomId('modal_tags')
                 .setTitle('Configurar Menções (IDs numéricos)');
 
-            const packsInput = new TextInputBuilder()
-                .setCustomId('input_packs')
-                .setLabel('Cargo @Packs (Copie e cole APENAS O NÚMERO)')
-                .setStyle(TextInputStyle.Short)
-                .setRequired(false)
-                .setValue(state.rolePacksId || '');
-                
-            const eluInput = new TextInputBuilder()
-                .setCustomId('input_elu')
-                .setLabel('ID do Elu (Copie e cole APENAS O NÚMERO)')
-                .setStyle(TextInputStyle.Short)
-                .setRequired(false)
-                .setValue(state.users.elu || '');
-                
-            const trolleiInput = new TextInputBuilder()
-                .setCustomId('input_trollei')
-                .setLabel('ID do Trollei (APENAS NÚMERO)')
-                .setStyle(TextInputStyle.Short)
-                .setRequired(false)
-                .setValue(state.users.trollei || '');
-                
-            const tockInput = new TextInputBuilder()
-                .setCustomId('input_tock')
-                .setLabel('ID do Tock (APENAS NÚMERO)')
-                .setStyle(TextInputStyle.Short)
-                .setRequired(false)
-                .setValue(state.users.tock || '');
+            const packsInput = new TextInputBuilder().setCustomId('input_packs').setLabel('Cargo @Packs (Copie e cole APENAS O NÚMERO)').setStyle(TextInputStyle.Short).setRequired(false).setValue(state.rolePacksId || '');
+            const eluInput = new TextInputBuilder().setCustomId('input_elu').setLabel('ID do Elu (Copie e cole APENAS O NÚMERO)').setStyle(TextInputStyle.Short).setRequired(false).setValue(state.users.elu || '');
+            const trolleiInput = new TextInputBuilder().setCustomId('input_trollei').setLabel('ID do Trollei (APENAS NÚMERO)').setStyle(TextInputStyle.Short).setRequired(false).setValue(state.users.trollei || '');
+            const tockInput = new TextInputBuilder().setCustomId('input_tock').setLabel('ID do Tock (APENAS NÚMERO)').setStyle(TextInputStyle.Short).setRequired(false).setValue(state.users.tock || '');
 
             modal.addComponents(
                 new ActionRowBuilder().addComponents(packsInput),
@@ -505,10 +477,22 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.isStringSelectMenu()) {
+        if (interaction.customId === 'select_membro_direto') {
+            const selected = interaction.values[0];
+            let idx = state.sequence.indexOf(selected);
+            if (idx !== -1) {
+                state.cycleIndex = idx;
+            } else {
+                state.sequence[state.cycleIndex] = selected; 
+            }
+            saveData();
+            await interaction.update({ content: `✅ A vez foi alterada para: **${NAMES[selected]}**.`, components: [] });
+            updatePanel(true);
+        }
+
         if (interaction.customId.startsWith('set_cycle_')) {
             if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return;
             
-            // "set_cycle_0" -> 0
             const step = parseInt(interaction.customId.split('_')[2]);
             const selected = interaction.values[0];
             
@@ -518,22 +502,25 @@ client.on('interactionCreate', async (interaction) => {
             await interaction.update({ components: getConfigComponents() });
             updatePanel(true);
         }
-        
-        if (interaction.customId === 'select_cycle_index') {
-            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-                return interaction.reply({ content: '🚫 Acesso negado.', ephemeral: true });
-            }
-            const index = parseInt(interaction.values[0]);
-            state.cycleIndex = index;
-            saveData();
-            
-            const novo = state.sequence[index];
-            await interaction.update({ content: `✅ O plantador atual foi forçado para: **${NAMES[novo]}**.`, components: [] });
-            updatePanel(true);
-        }
     }
 
     if (interaction.isModalSubmit()) {
+        if (interaction.customId === 'modal_tempo') {
+            const val = interaction.fields.getTextInputValue('input_horas');
+            const horas = parseFloat(val.replace(',', '.'));
+            if (isNaN(horas)) {
+                return interaction.reply({ content: '⚠️ Valor inválido. Digite apenas números.', ephemeral: true });
+            }
+            if (state.rotation === 0 || !state.finishTime) {
+                return interaction.reply({ content: 'O terreno está livre, não há tempo para ajustar.', ephemeral: true });
+            }
+            state.finishTime = Date.now() + (horas * 60 * 60 * 1000);
+            state.notified = false;
+            saveData();
+            updatePanel(true);
+            await interaction.reply({ content: `✅ O timer foi ajustado para **${horas} horas**.`, ephemeral: true });
+        }
+
         if (interaction.customId === 'modal_tags') {
             const rawPacks = interaction.fields.getTextInputValue('input_packs');
             const rawElu = interaction.fields.getTextInputValue('input_elu');
