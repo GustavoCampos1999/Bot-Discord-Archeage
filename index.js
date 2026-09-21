@@ -118,9 +118,9 @@ async function sendNewPanel(channel) {
         let statusText = '';
         if (Date.now() >= state.finishTime) {
             if (state.rotation === 1) {
-                statusText = `✅ **PRONTOS PARA COLHER (1/2)!**\nColha os packs e clique em Re-plantei.`;
+                statusText = `✅ **PRONTOS PARA COLHER (1/2)!**\nColha os packs e replante para a sua 2ª colheita.`;
             } else {
-                statusText = `✅ **PRONTOS PARA COLHER (2/2)!**\nColha os últimos packs e libere o terreno.`;
+                statusText = `✅ **PRONTOS PARA COLHER (2/2)!**\nColha os seus últimos packs e **JÁ REPLANTE** para o próximo.`;
             }
             embed.setColor('#e74c3c');
         } else {
@@ -136,7 +136,7 @@ async function sendNewPanel(channel) {
     const btnPlant = new ButtonBuilder().setCustomId('btn_plantar');
 
     if (state.rotation === 0) {
-        btnPlant.setLabel(`Plantei Packs (Sou o ${NAMES[currentKey]})`).setStyle(ButtonStyle.Success);
+        btnPlant.setLabel(`Terreno Zerado: Plantei Packs (Sou o ${NAMES[currentKey]})`).setStyle(ButtonStyle.Success);
     } else if (state.rotation === 1) {
         if (Date.now() < state.finishTime) {
             btnPlant.setLabel('Aguardando 1ª Colheita...').setStyle(ButtonStyle.Secondary).setDisabled(true);
@@ -147,7 +147,7 @@ async function sendNewPanel(channel) {
         if (Date.now() < state.finishTime) {
             btnPlant.setLabel('Aguardando 2ª Colheita...').setStyle(ButtonStyle.Secondary).setDisabled(true);
         } else {
-            btnPlant.setLabel('Colhi Tudo (Liberar Terreno)').setStyle(ButtonStyle.Primary).setDisabled(false);
+            btnPlant.setLabel(`Colhi Tudo e Plantei p/ o próximo (${NAMES[nextKey]})`).setStyle(ButtonStyle.Primary).setDisabled(false);
         }
     }
 
@@ -356,18 +356,18 @@ client.on('interactionCreate', async (interaction) => {
                 }
 
                 state.cycleIndex = (state.cycleIndex + 1) % 4;
-                state.rotation = 0;
-                state.finishTime = null;
+                state.rotation = 1;
+                state.finishTime = Date.now() + THREE_DAYS_MS;
                 state.notified = false;
                 saveData();
 
-                await interaction.reply({ content: `Terreno liberado! O próximo foi notificado.`, ephemeral: true });
+                await interaction.reply({ content: `✅ Turno finalizado! A contagem de 3 dias do ${NAMES[nextKey]} já começou!`, ephemeral: true });
                 
                 const channel = interaction.channel;
                 if (channel) {
-                    await channel.send(`✅ O terreno foi liberado por ${NAMES[currentKey]}! Agora é a vez de ${getMention(nextKey)} plantar.\n*(Se precisar trocar a pessoa, use o botão "Trocar Plantador Atual")*`);
+                    await channel.send(`✅ O ${NAMES[currentKey]} colheu sua última leva e **JÁ PLANTOU** para o ${getMention(nextKey)}! Em 3 dias é a colheita do ${getMention(nextKey)}.`);
                 }
-                await sendDM(state.users[nextKey], `🚨 **O Terreno está LIVRE!**\nO ${NAMES[currentKey]} terminou a colheita. É a sua vez de plantar!`);
+                await sendDM(state.users[nextKey], `🚨 **Terreno ocupado com seus packs!**\nO ${NAMES[currentKey]} colheu a vez dele e JÁ PLANTOU a sua vez! Em exatos 3 dias você fará a sua 1ª colheita.`);
             }
             updatePanel(true);
         }
