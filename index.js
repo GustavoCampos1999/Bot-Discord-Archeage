@@ -282,14 +282,14 @@ setInterval(async () => {
                     const nextKey = state.sequence[(state.cycleIndex + 1) % 4];
                     
                     if (state.rotation === 1) {
-                        await channel.send(`🔔 ${getMention(currentKey)}, seus packs da 1ª rotação estão prontos! Colha e replante.`);
-                        await sendDM(state.users[currentKey], `🌿 **Alerta do ArcheAge:**\nSeus packs da 1ª rotação estão PRONTOS! Vá lá colher e replantar a última leva.`);
+                        await channel.send(`🔔 ${getMention(currentKey)}, seus packs da 1ª rotação estão prontos! Colha e replante a 2ª.`);
+                        await sendDM(state.users[currentKey], `🌿 **Alerta do ArcheAge:**\nSeus packs da 1ª rotação estão PRONTOS! Vá lá colher e replantar a sua última leva.`);
                     } else if (state.rotation === 2) {
                         const roleMention = getRoleMention();
-                        await channel.send(`🔔 ${getMention(currentKey)}, seus últimos packs estão prontos!\n\n${roleMention} Atenção ${getMention(nextKey)}: O terreno ficará livre em instantes!`);
+                        await channel.send(`🔔 ${getMention(currentKey)}, seus últimos packs estão prontos!\n\n${roleMention} Atenção ${getMention(nextKey)}: O ${NAMES[currentKey]} está indo colher e JÁ VAI PLANTAR a sua vez!`);
                         
-                        await sendDM(state.users[currentKey], `🌿 **Alerta do ArcheAge:**\nSeus ÚLTIMOS packs estão PRONTOS! Vá lá colher e liberar o terreno.`);
-                        await sendDM(state.users[nextKey], `🚨 **Prepare-se!**\nO terreno ficará livre em instantes! Já pode ir finalizando seus packs para plantar.`);
+                        await sendDM(state.users[currentKey], `🌿 **Alerta do ArcheAge:**\nSeus ÚLTIMOS packs estão PRONTOS! Vá lá colher e lembre de já deixar os packs do ${NAMES[nextKey]} plantados na terra.`);
+                        await sendDM(state.users[nextKey], `🚨 **Fique de olho!**\nO ${NAMES[currentKey]} está indo colher a última rotação dele e já vai plantar a SUA ROTAÇÃO! Em exatos 3 dias você fará a sua 1ª colheita.`);
                     }
                 }
             } catch (err) {}
@@ -345,10 +345,10 @@ client.on('interactionCreate', async (interaction) => {
                 
                 const channel = interaction.channel;
                 if (channel) {
-                    await channel.send(`${roleMention} 🚨 Alerta de Preparação: O ${NAMES[currentKey]} plantou a ÚLTIMA rotação dele. Em exatos 3 dias será a vez de ${getMention(nextKey)}! Já vão craftando os packs!`);
+                    await channel.send(`${roleMention} 🚨 Alerta de Preparação: O ${NAMES[currentKey]} plantou a 2ª (Última) rotação dele. Em exatos 3 dias ele vai colher e plantar para o ${getMention(nextKey)}! Já vão craftando os packs!`);
                 }
                 
-                await sendDM(state.users[nextKey], `🚨 **Alerta de Preparação (ArcheAge)!**\nO ${NAMES[currentKey]} acabou de plantar a ÚLTIMA rotação dele. Em exatos 3 dias será a SUA VEZ de plantar!`);
+                await sendDM(state.users[nextKey], `🚨 **Alerta de Preparação (ArcheAge)!**\nO ${NAMES[currentKey]} acabou de plantar a 2ª (última) rotação dele. Em exatos 3 dias ele fará a colheita dele e JÁ PLANTARÁ A SUA VEZ! Deixe seus packs prontos.`);
                 
             } else if (state.rotation === 2) {
                 if (Date.now() < state.finishTime) {
