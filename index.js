@@ -122,7 +122,7 @@ function getMsgAvisoProximo(nomeAtual) {
         `🧱 **Materiais p/ 79 packs / 158 packs:**`,
         `\`\`\``,
         `Multi-Purpose Aging Larder  79  / 158`,
-        `  Royal Seed                39  /  79`,
+        `  Royal Seed                40  /  79`,
         `  Lumber                   395  / 790`,
         `  Stone Brick              395  / 790`,
         `  Iron Ingot               395  / 790`,
