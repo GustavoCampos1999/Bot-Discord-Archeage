@@ -109,7 +109,36 @@ async function sendDM(key, messageText) {
     } catch (err) {}
 }
 
-// Retorna lista de options para StringSelectMenu com os membros cadastrados
+// Mensagem que vai no privado do PRÓXIMO da fila quando o current planta a 2ª rotação
+function getMsgAvisoProximo(nomeAtual) {
+    return [
+        `🚨 Fala! O **${nomeAtual}** acabou de plantar a última rotação dele — em ~3 dias ele colhe e **já deixa seus packs no terreno**. Você já recebe a primeira rotação feita!`,
+        ``,
+        `📋 **Lembra do lembrete:**`,
+        `> São **79 packs** por rotação (158 nas 2 que você vai colher)`,
+        `> O aluguel da semana (suas 2 rotações) é **3.500 gold** — manda pro EluDelu!`,
+        `> Temos **4 terrenos**: 1 Treehouse + 3 24x24 — confere as loc no **#land-share**`,
+        ``,
+        `🧱 **Materiais p/ 79 packs / 158 packs:**`,
+        `\`\`\``,
+        `Multi-Purpose Aging Larder  79  / 158`,
+        `  Royal Seed                39  /  79`,
+        `  Lumber                   395  / 790`,
+        `  Stone Brick              395  / 790`,
+        `  Iron Ingot               395  / 790`,
+        ``,
+        `Pack de Queijo:`,
+        `  Lemon   1.170 / 2.340`,
+        `  Milk    1.950 / 3.900`,
+        ``,
+        `Pack de Mel:`,
+        `  Honey     160 /   320`,
+        `  Haybale   800 / 1.600`,
+        `\`\`\``,
+        `Boa sorte! 🌿`
+    ].join('\n');
+}
+
 function getMemberOptions(placeholder_prefix = '') {
     return Object.entries(state.members).map(([key, m]) => ({
         label: `${placeholder_prefix}${m.name}`,
@@ -243,12 +272,11 @@ setInterval(async () => {
 
                     if (state.rotation === 1) {
                         await channel.send(`🔔 ${getMention(currentKey)}, seus packs da 1ª rotação estão prontos! Colha e replante a 2ª.`);
-                        await sendDM(currentKey, `🌿 **Alerta do ArcheAge:**\nSeus packs da **1ª rotação** estão PRONTOS! Vá lá colher e replantar a sua última leva.`);
+                        await sendDM(currentKey, `🌿 Opa! Seus packs da **1ª rotação** tão prontos!\nVai lá colher e replantar a 2ª leva. Lembra que são **79 packs** nos 4 terrenos (1 treehouse + 3 24x24). Confere as loc no #land-share!`);
                     } else if (state.rotation === 2) {
-                        const roleMention = getRoleMention();
-                        await channel.send(`🔔 ${getMention(currentKey)}, seus últimos packs estão prontos!\n\n${roleMention} Atenção ${getMention(nextKey)}: O ${getDisplayName(currentKey)} está indo colher e JÁ VAI PLANTAR a sua vez!`);
-                        await sendDM(currentKey, `🌿 **Alerta do ArcheAge:**\nSeus **ÚLTIMOS packs** estão PRONTOS! Vá lá colher e já deixe os packs do ${getDisplayName(nextKey)} plantados na terra.`);
-                        await sendDM(nextKey, `🚨 **Fique de olho!**\nO ${getDisplayName(currentKey)} está indo colher a última rotação e já vai plantar a SUA VEZ! Em ~3 dias você fará a sua 1ª colheita.`);
+                        await channel.send(`🔔 ${getMention(currentKey)}, seus últimos packs estão prontos! Atenção ${getMention(nextKey)}: o ${getDisplayName(currentKey)} vai colher e já planta a sua vez!`);
+                        await sendDM(currentKey, `🌿 Sua **2ª e última rotação** tá pronta!\nVai lá colher os 79 packs e **já replanta os packs do ${getDisplayName(nextKey)}** no terreno antes de sair — a pessoa já recebe os packs feitos!\n\nLembra das loc no #land-share (1 treehouse + 3 24x24).`);
+                        await sendDM(nextKey, getMsgAvisoProximo(getDisplayName(currentKey)));
                     }
                 }
             } catch (err) {}
@@ -303,8 +331,8 @@ client.on('interactionCreate', async (interaction) => {
                 state.notified = false;
                 saveData();
                 await interaction.reply({ content: `2ª Rotação iniciada! Avisando o próximo da fila.`, ephemeral: true });
-                await interaction.channel.send(`${roleMention} 🚨 Alerta de Preparação: O ${getDisplayName(currentKey)} plantou a 2ª (Última) rotação dele. Em exatos 3 dias ele vai colher e plantar para o ${getMention(nextKey)}! Já vão craftando os packs!`);
-                await sendDM(nextKey, `🚨 **Alerta de Preparação (ArcheAge)!**\nO ${getDisplayName(currentKey)} acabou de plantar a 2ª (última) rotação. Em ~3 dias ele colhe e JÁ PLANTARÁ A SUA VEZ! Deixe seus packs prontos.`);
+                await interaction.channel.send(`🚨 Atenção ${getMention(nextKey)}: O ${getDisplayName(currentKey)} plantou a 2ª (última) rotação. Em ~3 dias ele colhe e já planta a sua vez!`);
+                await sendDM(nextKey, getMsgAvisoProximo(getDisplayName(currentKey)));
 
             } else if (state.rotation === 2) {
                 if (Date.now() < state.finishTime) return interaction.reply({ content: '🚫 Aguardando colheita.', ephemeral: true });
@@ -314,8 +342,8 @@ client.on('interactionCreate', async (interaction) => {
                 state.notified = false;
                 saveData();
                 await interaction.reply({ content: `✅ Turno finalizado! A contagem de 3 dias do ${getDisplayName(nextKey)} já começou!`, ephemeral: true });
-                await interaction.channel.send(`✅ O ${getDisplayName(currentKey)} colheu e **JÁ PLANTOU** para o ${getMention(nextKey)}! Em 3 dias é a colheita do ${getMention(nextKey)}.`);
-                await sendDM(nextKey, `🚨 **Terreno com seus packs!**\nO ${getDisplayName(currentKey)} colheu e JÁ PLANTOU a sua vez! Em ~3 dias você fará a sua 1ª colheita.`);
+                await interaction.channel.send(`✅ O ${getDisplayName(currentKey)} colheu e **já plantou** para o ${getMention(nextKey)}! Em 3 dias é a 1ª colheita do ${getDisplayName(nextKey)}.`);
+                await sendDM(nextKey, `🌿 Fala! O **${getDisplayName(currentKey)}** acabou de colher e **já deixou seus packs no terreno**. Em ~3 dias você faz a 1ª colheita!\n\nConfere as loc no #land-share e boa sorte 🤙`);
             }
             updatePanel(true);
         }
