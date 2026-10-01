@@ -21,7 +21,11 @@ const DATA_FILE = path.join(__dirname, 'data.json');
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 const CHECK_INTERVAL = 60 * 1000;
 
-// Estado padrão — só é usado se data.json não existir
+const JSONBIN_KEY    = process.env.JSONBIN_KEY    || '';
+const JSONBIN_BIN_ID = process.env.JSONBIN_BIN_ID || '';
+const USE_JSONBIN    = JSONBIN_KEY !== '' && JSONBIN_BIN_ID !== '';
+
+// Estado padrão — só é usado na primeira vez
 const DEFAULT_STATE = {
     sequence: ['elu', 'trollei', 'elu', 'tock'],
     cycleIndex: 0,
@@ -31,44 +35,86 @@ const DEFAULT_STATE = {
     panelMessageId: null,
     panelChannelId: null,
     rolePacksId: null,
-    // members: { chave: { name: 'NickDisplay', id: 'DISCORD_ID' } }
     members: {
-        elu:     { name: 'EluDelu',   id: '210789096837218306' },
-        trollei: { name: 'Trollei',   id: '372538969805553664' },
-        tock:    { name: 'TockTock',  id: '467871652517249034' },
-        tonelada:{ name: 'Tonelada',  id: '237228450455224321' }
+        elu:      { name: 'EluDelu',   id: '210789096837218306' },
+        trollei:  { name: 'Trollei',   id: '372538969805553664' },
+        tock:     { name: 'TockTock',  id: '467871652517249034' },
+        tonelada: { name: 'Tonelada',  id: '237228450455224321' }
     }
 };
 
 let state = JSON.parse(JSON.stringify(DEFAULT_STATE));
 
-function loadData() {
+// Mescla o estado salvo com o padrão sem apagar campos existentes
+function mergeState(saved) {
+    state = {
+        ...state,
+        ...saved,
+        members: (saved.members && Object.keys(saved.members).length > 0)
+            ? saved.members
+            : state.members
+    };
+    if (!state.sequence || state.sequence.length !== 4) {
+        state.sequence = DEFAULT_STATE.sequence;
+    }
+}
+
+// ===== PERSISTÊNCIA: JSONBin.io (se configurado) ou arquivo local =====
+
+async function loadData() {
+    if (USE_JSONBIN) {
+        try {
+            const res = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`, {
+                headers: { 'X-Master-Key': JSONBIN_KEY }
+            });
+            if (res.ok) {
+                const json = await res.json();
+                const saved = json.record;
+                if (saved && Object.keys(saved).length > 0) {
+                    mergeState(saved);
+                    console.log('✅ Estado carregado do JSONBin.io');
+                    return;
+                }
+            }
+        } catch (err) {
+            console.error('Erro ao carregar do JSONBin, tentando arquivo local:', err.message);
+        }
+    }
+    // Fallback: arquivo local
     if (fs.existsSync(DATA_FILE)) {
         try {
             const saved = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-            // Mescla campos de ciclo/rotação, mas PRESERVA members do arquivo salvo
-            state = {
-                ...state,
-                ...saved,
-                // Garante que members nunca seja substituído pelo padrão se já existir no arquivo
-                members: (saved.members && Object.keys(saved.members).length > 0)
-                    ? saved.members
-                    : state.members
-            };
-            if (!state.sequence || state.sequence.length !== 4) {
-                state.sequence = DEFAULT_STATE.sequence;
-            }
+            mergeState(saved);
+            console.log('✅ Estado carregado do arquivo local');
         } catch (err) {
             console.error('Erro ao ler data.json:', err);
         }
     } else {
-        // Primeira vez — salva as IDs padrão
-        saveData();
+        await saveData(); // Salva o padrão já na primeira vez
     }
 }
 
-function saveData() {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
+async function saveData() {
+    // Salva sempre no arquivo local (backup)
+    try {
+        fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
+    } catch (e) {}
+
+    // Salva no JSONBin.io se configurado
+    if (USE_JSONBIN) {
+        try {
+            await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Master-Key': JSONBIN_KEY
+                },
+                body: JSON.stringify(state)
+            });
+        } catch (err) {
+            console.error('Erro ao salvar no JSONBin:', err.message);
+        }
+    }
 }
 
 function formatTimeLeft(ms) {
@@ -286,9 +332,9 @@ setInterval(async () => {
 }, CHECK_INTERVAL);
 
 // ===== BOT READY =====
-client.once('ready', () => {
+client.once('ready', async () => {
     console.log(`Bot logado como ${client.user.tag}`);
-    loadData();
+    await loadData();
     updatePanel(true);
 });
 
