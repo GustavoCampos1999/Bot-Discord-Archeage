@@ -354,7 +354,8 @@ function buildFreedichEmbed() {
         embed
             .setColor('#95a5a6')
             .setDescription(
-                `# Status: ⚪ MIA\n\n` +
+                `# Status:\n` +
+                `### ⚪ MIA\n\n` +
                 `Clique em **➕ Adicionar Timer** abaixo e informe a hora em que o Gold Trader **entrou** ou **saiu** da ilha.`
             );
         return embed;
@@ -372,18 +373,20 @@ function buildFreedichEmbed() {
         embed
             .setColor('#e74c3c')
             .setDescription(
-                `# Status: 🔴 OFF\n` +
+                `# Status:\n` +
+                `### 🔴 OFF\n` +
                 `🕒 Último registro: Saiu às <t:${lastDiscordTs}:T>\n\n\n` +
-                `🪙 Gold trader vai voltar a ilha <t:${nextDiscordTs}:R> — às <t:${nextDiscordTs}:t>\n` +
+                `### 🪙 Gold trader vai voltar a ilha <t:${nextDiscordTs}:R> — às <t:${nextDiscordTs}:t>\n` +
                 `⛵ E saíra novamente <t:${followingDiscordTs}:R> — às <t:${followingDiscordTs}:t>`
             );
     } else {
         embed
             .setColor('#2ecc71')
             .setDescription(
-                `# Status: 🟢 ON\n` +
+                `# Status:\n` +
+                `### 🟢 ON\n` +
                 `🕒 Último registro: Entrou às <t:${lastDiscordTs}:T>\n\n\n` +
-                `⛵ Gold trader vai sair da ilha <t:${nextDiscordTs}:R> — às <t:${nextDiscordTs}:t>\n` +
+                `### ⛵ Gold trader vai sair da ilha <t:${nextDiscordTs}:R> — às <t:${nextDiscordTs}:t>\n` +
                 `🪙 E voltará novamente <t:${followingDiscordTs}:R> — às <t:${followingDiscordTs}:t>`
             );
     }
