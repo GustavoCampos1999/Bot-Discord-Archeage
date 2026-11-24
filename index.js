@@ -42,6 +42,7 @@ const ELU_USER_ID = '210789096837218306';
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+const EPHEMERAL_AUTO_DELETE_MS = 14 * 60 * 1000 + 30 * 1000; // 14m30s (dentro do limite de 15min do token do Discord)
 
 const JSONBIN_KEY = process.env.JSONBIN_KEY || '';
 const JSONBIN_BIN_ID = process.env.JSONBIN_BIN_ID || '';
@@ -315,6 +316,15 @@ function isAdmin(interaction) {
     return Boolean(interaction.member?.permissions?.has(PermissionsBitField.Flags.Administrator));
 }
 
+async function replyEphemeral(interaction, payload) {
+    const data = typeof payload === 'string' ? { content: payload, ephemeral: true } : { ...payload, ephemeral: true };
+    const res = await interaction.reply(data);
+    setTimeout(() => {
+        interaction.deleteReply().catch(() => null);
+    }, EPHEMERAL_AUTO_DELETE_MS);
+    return res;
+}
+
 // ===== MOTOR DE CICLO DO FREEDICH =====
 function advanceFreedichCycle(now = Date.now()) {
     const f = state.freedich;
@@ -344,13 +354,12 @@ function buildFreedichEmbed() {
         embed
             .setColor('#95a5a6')
             .setDescription(
-                'Status: ⚪ **MIA**\n\n' +
-                'Clique em **➕ Adicionar Timer** abaixo e informe a hora em que o Gold Trader **entrou** ou **saiu** da ilha.'
+                `# Status: ⚪ MIA\n\n` +
+                `Clique em **➕ Adicionar Timer** abaixo e informe a hora em que o Gold Trader **entrou** ou **saiu** da ilha.`
             );
         return embed;
     }
 
-    const now = Date.now();
     const nextTs = f.nextChangeTime;
     const followingTs = nextTs + TWO_HOURS_MS;
     const lastActionMs = f.lastActionTime || (nextTs - TWO_HOURS_MS);
@@ -363,19 +372,19 @@ function buildFreedichEmbed() {
         embed
             .setColor('#e74c3c')
             .setDescription(
-                `Status: 🔴 **OFF**\n` +
-                `🕒 Último registro: Saiu às <t:${lastDiscordTs}:T>\n\n` +
-                `🪙 falta **${formatDuration(nextTs - now)}** para ser reativado — às <t:${nextDiscordTs}:t> (<t:${nextDiscordTs}:R>)\n` +
-                `⛵ **Prox (OFF):** falta **${formatDuration(followingTs - now)}** — às <t:${followingDiscordTs}:t> (<t:${followingDiscordTs}:R>)`
+                `# Status: 🔴 OFF\n` +
+                `🕒 Último registro: Saiu às <t:${lastDiscordTs}:T>\n\n\n` +
+                `🪙 Gold trader vai voltar a ilha <t:${nextDiscordTs}:R> — às <t:${nextDiscordTs}:t>\n` +
+                `⛵ E saíra novamente <t:${followingDiscordTs}:R> — às <t:${followingDiscordTs}:t>`
             );
     } else {
         embed
             .setColor('#2ecc71')
             .setDescription(
-                `Status: 🟢 **ON**\n` +
-                `🕒 Último registro: Entrou às <t:${lastDiscordTs}:T>\n\n` +
-                `⛵ falta **${formatDuration(nextTs - now)}** para desativar (OFF) — às <t:${nextDiscordTs}:t> (<t:${nextDiscordTs}:R>)\n` +
-                `🪙 **Prox (ON):** falta **${formatDuration(followingTs - now)}** — às <t:${followingDiscordTs}:t> (<t:${followingDiscordTs}:R>)`
+                `# Status: 🟢 ON\n` +
+                `🕒 Último registro: Entrou às <t:${lastDiscordTs}:T>\n\n\n` +
+                `⛵ Gold trader vai sair da ilha <t:${nextDiscordTs}:R> — às <t:${nextDiscordTs}:t>\n` +
+                `🪙 E voltará novamente <t:${followingDiscordTs}:R> — às <t:${followingDiscordTs}:t>`
             );
     }
 
@@ -474,9 +483,9 @@ function buildWardrobeMenuPayload(userId, notice = '') {
     return {
         content:
             `${header}**👘 Costume & Undergarment (Aviso no PV — 30 Dias)**\n` +
-            `Quando expirar, o bot avisa no seu **PV** com os botões de lavar.\n\n` +
+            `Quando expirar, o bot avisa no seu **PV** com os botões de lavar (renova por **30 dias**).\n\n` +
             `${statusText}`,
-        components: [rowActions, buildWardrobeWashButtons()],
+        components: [rowActions],
         ephemeral: true
     };
 }
@@ -780,7 +789,7 @@ async function runChecks() {
 
     if (shouldResendPanel) {
         await updatePanel(true);
-    } else if (state.freedich.status !== 'MIA' || changed) {
+    } else if (changed) {
         await updatePanel(false);
     }
 }
@@ -823,6 +832,16 @@ client.on('messageCreate', async (message) => {
         const sentMenu = await message.channel.send(buildPacksConfigPayload());
         state.packsMenuMessageId = sentMenu.id;
         await saveData();
+
+        const menuId = sentMenu.id;
+        setTimeout(async () => {
+            if (state.packsMenuMessageId === menuId) {
+                state.packsMenuMessageId = null;
+                await saveData();
+                await sentMenu.delete().catch(() => null);
+                await updatePanel(true);
+            }
+        }, 15 * 60 * 1000);
         return;
     }
 
@@ -834,9 +853,8 @@ client.on('messageCreate', async (message) => {
 // ===== HELPERS DE INTERAÇÃO =====
 function requireElu(interaction) {
     if (interaction.user.id !== ELU_USER_ID) {
-        interaction.reply({
-            content: '🚫 Apenas o EluDelu pode usar a configuração de Packs.',
-            ephemeral: true
+        replyEphemeral(interaction, {
+            content: '🚫 Apenas o EluDelu pode usar a configuração de Packs.'
         }).catch(() => null);
         return false;
     }
@@ -848,9 +866,8 @@ async function handlePacksReplant(interaction) {
     const isDesignatedManager = Boolean(managerMember && managerMember.id === interaction.user.id);
 
     if (!isDesignatedManager && interaction.user.id !== ELU_USER_ID && !isAdmin(interaction)) {
-        return interaction.reply({
-            content: `🚫 Apenas o(a) Gestor(a) (${managerMember ? managerMember.name : 'não definido'}) pode clicar em **Replantei**!`,
-            ephemeral: true
+        return replyEphemeral(interaction, {
+            content: `🚫 Apenas o(a) Gestor(a) (${managerMember ? managerMember.name : 'não definido'}) pode clicar em **Replantei**!`
         });
     }
 
@@ -866,9 +883,8 @@ async function handlePacksReplant(interaction) {
             components: []
         });
     } else {
-        await interaction.reply({
-            content: `🌱 **Packs replantados!** Timer resetado para **3 dias** (<t:${ts}:f> — <t:${ts}:R>).`,
-            ephemeral: true
+        await replyEphemeral(interaction, {
+            content: `🌱 **Packs replantados!** Timer resetado para **3 dias** (<t:${ts}:f> — <t:${ts}:R>).`
         });
     }
 
@@ -924,7 +940,7 @@ async function handleWardrobeWash(interaction, mode) {
     if (!interaction.guild && interaction.message?.author?.id === client.user.id) {
         await interaction.update({ content: msg, components: [] });
     } else {
-        await interaction.update(buildWardrobeMenuPayload(userId, msg));
+        await replyEphemeral(interaction, { content: msg });
     }
 }
 
@@ -947,9 +963,8 @@ client.on('interactionCreate', async (interaction) => {
                 }
 
                 await saveData();
-                await interaction.reply({
-                    content: '⚪ Timer do Freedich marcado como **MIA**. O botão **➕ Adicionar Timer** foi liberado!',
-                    ephemeral: true
+                await replyEphemeral(interaction, {
+                    content: '⚪ Timer do Freedich marcado como **MIA**. O botão **➕ Adicionar Timer** foi liberado!'
                 });
                 await updatePanel(true);
                 return;
@@ -1045,7 +1060,7 @@ client.on('interactionCreate', async (interaction) => {
                 if (!requireElu(interaction)) return;
                 const entries = Object.entries(state.members);
                 if (entries.length === 0) {
-                    return interaction.reply({ content: '⚠️ Nenhuma pessoa cadastrada.', ephemeral: true });
+                    return replyEphemeral(interaction, { content: '⚠️ Nenhuma pessoa cadastrada.' });
                 }
 
                 const options = entries.slice(0, 25).map(([key, m]) => ({
@@ -1059,10 +1074,9 @@ client.on('interactionCreate', async (interaction) => {
                     .setPlaceholder('Selecione quem deseja remover')
                     .addOptions(options);
 
-                await interaction.reply({
+                await replyEphemeral(interaction, {
                     content: '🗑️ Selecione a pessoa para remover da lista:',
-                    components: [new ActionRowBuilder().addComponents(select)],
-                    ephemeral: true
+                    components: [new ActionRowBuilder().addComponents(select)]
                 });
                 return;
             }
@@ -1078,7 +1092,7 @@ client.on('interactionCreate', async (interaction) => {
 
             // 3. Wardrobe: Menu Ephemeral individual (ao lado de Adicionar Timer)
             if (customId === 'wardrobe_menu') {
-                await interaction.reply(buildWardrobeMenuPayload(interaction.user.id));
+                await replyEphemeral(interaction, buildWardrobeMenuPayload(interaction.user.id));
                 return;
             }
 
@@ -1191,9 +1205,8 @@ client.on('interactionCreate', async (interaction) => {
                 const saiuRaw = interaction.fields.getTextInputValue('input_hora_saiu').trim();
 
                 if ((entrouRaw && saiuRaw) || (!entrouRaw && !saiuRaw)) {
-                    return interaction.reply({
-                        content: '⚠️ Preencha **apenas um** dos campos (a hora que ENTROU **ou** a hora que SAIU).',
-                        ephemeral: true
+                    return replyEphemeral(interaction, {
+                        content: '⚠️ Preencha **apenas um** dos campos (a hora que ENTROU **ou** a hora que SAIU).'
                     });
                 }
 
@@ -1201,9 +1214,8 @@ client.on('interactionCreate', async (interaction) => {
                 const eventTs = parseBrasiliaTimeToday(isEntrou ? entrouRaw : saiuRaw);
 
                 if (!eventTs) {
-                    return interaction.reply({
-                        content: '⚠️ Horário inválido! Use o formato `HH:MM` no horário de Brasília (ex: `08:30` ou `14:00`).',
-                        ephemeral: true
+                    return replyEphemeral(interaction, {
+                        content: '⚠️ Horário inválido! Use o formato `HH:MM` no horário de Brasília (ex: `08:30` ou `14:00`).'
                     });
                 }
 
@@ -1228,13 +1240,12 @@ client.on('interactionCreate', async (interaction) => {
                 const nextAction = state.freedich.status === 'ON' ? 'desativa (OFF)' : 'reativa (ON)';
                 const followingAction = state.freedich.status === 'ON' ? 'reativa (ON)' : 'desativa (OFF)';
 
-                await interaction.reply({
+                await replyEphemeral(interaction, {
                     content:
                         `✅ **Timer do Freedich configurado!**\n` +
                         `Status atual: ${statusLabel}\n` +
                         `Próximo evento: ${nextAction} às <t:${nextUnix}:t> (<t:${nextUnix}:R>)\n` +
-                        `Depois disso: ${followingAction} às <t:${followingUnix}:t> (<t:${followingUnix}:R>)`,
-                    ephemeral: true
+                        `Depois disso: ${followingAction} às <t:${followingUnix}:t> (<t:${followingUnix}:R>)`
                 });
 
                 await updatePanel(true);
@@ -1248,9 +1259,8 @@ client.on('interactionCreate', async (interaction) => {
                 const ms = parseDHM(rawDhm);
 
                 if (!ms) {
-                    return interaction.reply({
-                        content: '⚠️ Formato inválido! Use `(dias)(horas)(minutos)`, ex: `(3)(0)(0)`, `2 14 30` ou `2d 14h 30m`.',
-                        ephemeral: true
+                    return replyEphemeral(interaction, {
+                        content: '⚠️ Formato inválido! Use `(dias)(horas)(minutos)`, ex: `(3)(0)(0)`, `2 14 30` ou `2d 14h 30m`.'
                     });
                 }
 
@@ -1264,9 +1274,8 @@ client.on('interactionCreate', async (interaction) => {
                 }
 
                 const ts = Math.floor(state.packs.finishTime / 1000);
-                await interaction.reply({
-                    content: `⏱️ **Timer dos Packs definido!** Falta **${formatDuration(ms)}** — prontos em <t:${ts}:f> (<t:${ts}:R>).`,
-                    ephemeral: true
+                await replyEphemeral(interaction, {
+                    content: `⏱️ **Timer dos Packs definido!** Falta **${formatDuration(ms)}** — prontos em <t:${ts}:f> (<t:${ts}:R>).`
                 });
                 return;
             }
@@ -1279,9 +1288,8 @@ client.on('interactionCreate', async (interaction) => {
                 const idMatch = rawId.match(/\d{17,20}/);
 
                 if (!idMatch) {
-                    return interaction.reply({
-                        content: '⚠️ ID do Discord inválido! Cole o ID numérico do usuário (17 a 20 dígitos).',
-                        ephemeral: true
+                    return replyEphemeral(interaction, {
+                        content: '⚠️ ID do Discord inválido! Cole o ID numérico do usuário (17 a 20 dígitos).'
                     });
                 }
 
@@ -1299,9 +1307,8 @@ client.on('interactionCreate', async (interaction) => {
                     if (menuMsg) await menuMsg.edit(buildPacksConfigPayload()).catch(() => null);
                 }
 
-                await interaction.reply({
-                    content: `✅ Pessoa **${name}** (<@${discordId}>) salva! Agora você pode selecioná-la nos menus acima.`,
-                    ephemeral: true
+                await replyEphemeral(interaction, {
+                    content: `✅ Pessoa **${name}** (<@${discordId}>) salva! Agora você pode selecioná-la nos menus acima.`
                 });
                 return;
             }
@@ -1312,9 +1319,8 @@ client.on('interactionCreate', async (interaction) => {
                 const underRaw = interaction.fields.getTextInputValue('input_undergarment_dhm').trim();
 
                 if (!costumeRaw && !underRaw) {
-                    return interaction.reply({
-                        content: '⚠️ Preencha pelo menos um campo (**Costume** ou **Undergarment**).',
-                        ephemeral: true
+                    return replyEphemeral(interaction, {
+                        content: '⚠️ Preencha pelo menos um campo (**Costume** ou **Undergarment**).'
                     });
                 }
 
@@ -1322,15 +1328,13 @@ client.on('interactionCreate', async (interaction) => {
                 const underMs = underRaw ? parseDHM(underRaw) : null;
 
                 if (costumeRaw && !costumeMs) {
-                    return interaction.reply({
-                        content: '⚠️ Tempo do **Costume** inválido! Use `(dias)(horas)(minutos)`, ex: `(29)(12)(30)` ou `29 12 30`.',
-                        ephemeral: true
+                    return replyEphemeral(interaction, {
+                        content: '⚠️ Tempo do **Costume** inválido! Use `(dias)(horas)(minutos)`, ex: `(29)(12)(30)` ou `29 12 30`.'
                     });
                 }
                 if (underRaw && !underMs) {
-                    return interaction.reply({
-                        content: '⚠️ Tempo do **Undergarment** inválido! Use `(dias)(horas)(minutos)`, ex: `(15)(08)(00)` ou `15 8 0`.',
-                        ephemeral: true
+                    return replyEphemeral(interaction, {
+                        content: '⚠️ Tempo do **Undergarment** inválido! Use `(dias)(horas)(minutos)`, ex: `(15)(08)(00)` ou `15 8 0`.'
                     });
                 }
 
@@ -1363,21 +1367,10 @@ client.on('interactionCreate', async (interaction) => {
                 state.wardrobe[userId] = entry;
                 await saveData();
 
-                const dmSent = await sendDMByUserId(userId, {
+                await replyEphemeral(interaction, {
                     content:
-                        `✅ **Alerta cadastrado com sucesso!**\n` +
-                        `${summaryLines.join('\n')}\n\n` +
-                        `Vou te avisar aqui no PV quando expirar. Se quiser marcar que já lavou antes (renova p/ 30 dias), use os botões abaixo:`,
-                    components: [buildWardrobeWashButtons()]
-                });
-
-                const dmWarning = dmSent
-                    ? '📩 Também te enviei uma confirmação no PV!'
-                    : '⚠️ Não consegui enviar DM para você — verifique se suas **Mensagens Diretas do servidor** estão liberadas para receber o alerta quando expirar!';
-
-                await interaction.reply({
-                    content: `✅ **Timers salvos!**\n${summaryLines.join('\n')}\n\n${dmWarning}`,
-                    ephemeral: true
+                        `✅ **Timers salvos!**\n${summaryLines.join('\n')}\n\n` +
+                        `📩 Quando expirar, você receberá um aviso no seu **PV** com os botões de lavar (deixe as DMs do servidor liberadas).`
                 });
                 return;
             }
@@ -1385,7 +1378,7 @@ client.on('interactionCreate', async (interaction) => {
     } catch (err) {
         console.error('Erro ao processar interação:', err);
         if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: '⚠️ Ocorreu um erro ao processar sua ação.', ephemeral: true }).catch(() => null);
+            await replyEphemeral(interaction, { content: '⚠️ Ocorreu um erro ao processar sua ação.' }).catch(() => null);
         }
     }
 });
