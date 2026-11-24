@@ -37,6 +37,7 @@ const client = new Client({
 const DATA_FILE = path.join(__dirname, 'data.json');
 const CHECK_INTERVAL_MS = 30 * 1000;
 const BRT_OFFSET_MS = -3 * 60 * 60 * 1000; // Horário de Brasília (UTC-3)
+const ELU_USER_ID = '210789096837218306';
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
@@ -50,15 +51,17 @@ const USE_JSONBIN = JSONBIN_KEY !== '' && JSONBIN_BIN_ID !== '';
 const DEFAULT_STATE = {
     panelChannelId: null,
     panelMessageId: null,
+    lastAlertMessageId: null,
+    packsMenuMessageId: null,
 
-    // 1. Freedich Gold Seller (2h ON / 2h OFF ou MIA)
+    // 1. Freedich Gold Trader (2h ON / 2h OFF ou MIA)
     freedich: {
         status: 'MIA',        // 'ON' | 'OFF' | 'MIA'
         nextChangeTime: null, // Timestamp em ms da próxima mudança
-        lastActionText: null
+        lastActionTime: null  // Timestamp em ms do último evento ON/OFF
     },
 
-    // 2. Packs (PV para escolhidos + Gestor(a) com botão Replantei 3 dias)
+    // 2. Packs (configurado apenas via !packs pelo EluDelu; botão Replantei só no PV do Gestor)
     packs: {
         finishTime: null,
         notified: false,
@@ -66,7 +69,7 @@ const DEFAULT_STATE = {
         manager: 'elu'
     },
 
-    // Membros salvos para seleção nos menus de Packs
+    // Membros salvos para seleção no menu !packs
     members: {
         elu:      { name: 'EluDelu',   id: '210789096837218306' },
         trollei:  { name: 'Trollei',   id: '372538969805553664' },
@@ -94,13 +97,17 @@ function mergeState(saved) {
 
     const savedFreedich = saved.freedich && typeof saved.freedich === 'object' ? saved.freedich : {};
     const validStatus = ['ON', 'OFF', 'MIA'].includes(savedFreedich.status) ? savedFreedich.status : 'MIA';
+    const nextChangeTime = typeof savedFreedich.nextChangeTime === 'number' ? savedFreedich.nextChangeTime : null;
+    const lastActionTime = typeof savedFreedich.lastActionTime === 'number'
+        ? savedFreedich.lastActionTime
+        : (nextChangeTime ? nextChangeTime - TWO_HOURS_MS : null);
 
     const savedPacks = saved.packs && typeof saved.packs === 'object' ? saved.packs : {};
-    let recipients = Array.isArray(savedPacks.recipients)
+    const recipients = Array.isArray(savedPacks.recipients)
         ? savedPacks.recipients.filter(k => mergedMembers[k])
         : DEFAULT_STATE.packs.recipients.filter(k => mergedMembers[k]);
 
-    let manager = (savedPacks.manager && mergedMembers[savedPacks.manager])
+    const manager = (savedPacks.manager && mergedMembers[savedPacks.manager])
         ? savedPacks.manager
         : (mergedMembers[DEFAULT_STATE.packs.manager] ? DEFAULT_STATE.packs.manager : (memberKeys[0] || null));
 
@@ -109,10 +116,12 @@ function mergeState(saved) {
     state = {
         panelChannelId: saved.panelChannelId || null,
         panelMessageId: saved.panelMessageId || null,
+        lastAlertMessageId: saved.lastAlertMessageId || null,
+        packsMenuMessageId: saved.packsMenuMessageId || null,
         freedich: {
             status: validStatus,
-            nextChangeTime: typeof savedFreedich.nextChangeTime === 'number' ? savedFreedich.nextChangeTime : null,
-            lastActionText: savedFreedich.lastActionText || null
+            nextChangeTime,
+            lastActionTime
         },
         packs: {
             finishTime: typeof savedPacks.finishTime === 'number' ? savedPacks.finishTime : null,
@@ -188,7 +197,7 @@ function saveData() {
 
 // ===== UTILITÁRIOS DE TEMPO E FORMATAÇÃO =====
 function formatDuration(ms) {
-    if (ms <= 0) return 'Pronto!';
+    if (ms <= 0) return '0m';
     const totalMinutes = Math.floor(ms / (60 * 1000));
     const days = Math.floor(totalMinutes / (24 * 60));
     const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
@@ -199,13 +208,6 @@ function formatDuration(ms) {
     if (hours > 0 || days > 0) parts.push(`${hours}h`);
     parts.push(`${minutes}m`);
     return parts.join(' ');
-}
-
-function formatBrasiliaHHMM(ts) {
-    const d = new Date(ts + BRT_OFFSET_MS);
-    const hh = String(d.getUTCHours()).padStart(2, '0');
-    const mm = String(d.getUTCMinutes()).padStart(2, '0');
-    return `${hh}:${mm}`;
 }
 
 /**
@@ -322,8 +324,8 @@ function advanceFreedichCycle(now = Date.now()) {
     while (now >= f.nextChangeTime) {
         const changeTs = f.nextChangeTime;
         f.status = f.status === 'ON' ? 'OFF' : 'ON';
+        f.lastActionTime = changeTs;
         f.nextChangeTime = changeTs + TWO_HOURS_MS;
-        f.lastActionText = `${f.status === 'ON' ? 'Entrou' : 'Saiu'} às ${formatBrasiliaHHMM(changeTs)}`;
         events.push({
             status: f.status,
             changedAt: changeTs,
@@ -333,17 +335,17 @@ function advanceFreedichCycle(now = Date.now()) {
     return events;
 }
 
-// ===== COMPONENTES & EMBEDS DO PAINEL PRINCIPAL =====
+// ===== PAINEL PRINCIPAL (APENAS FREEDICH GOLD TRADER + BOTÃO COSTUME/UNDER) =====
 function buildFreedichEmbed() {
     const f = state.freedich;
-    const embed = new EmbedBuilder().setTitle('🪙 Freedich — Gold Seller (Brasília)');
+    const embed = new EmbedBuilder().setTitle('🪙 Freedich — Gold Trader');
 
     if (f.status === 'MIA' || !f.nextChangeTime) {
         embed
             .setColor('#95a5a6')
             .setDescription(
-                '**Status:** ⚪ **MIA — Sem Timer** *(Reset de servidor / horário desconhecido)*\n\n' +
-                'Clique em **➕ Adicionar Timer** abaixo e informe a hora de Brasília em que o Gold Seller **entrou** ou **saiu** da ilha.'
+                'Status: ⚪ **MIA**\n\n' +
+                'Clique em **➕ Adicionar Timer** abaixo e informe a hora em que o Gold Trader **entrou** ou **saiu** da ilha.'
             );
         return embed;
     }
@@ -351,103 +353,39 @@ function buildFreedichEmbed() {
     const now = Date.now();
     const nextTs = f.nextChangeTime;
     const followingTs = nextTs + TWO_HOURS_MS;
+    const lastActionMs = f.lastActionTime || (nextTs - TWO_HOURS_MS);
+
+    const lastDiscordTs = Math.floor(lastActionMs / 1000);
     const nextDiscordTs = Math.floor(nextTs / 1000);
     const followingDiscordTs = Math.floor(followingTs / 1000);
 
-    if (f.status === 'ON') {
-        embed
-            .setColor('#2ecc71')
-            .setDescription(
-                `**Status:** 🟢 **GOLD SELLER ON (Na Ilha!)**\n` +
-                (f.lastActionText ? `🕒 *Último registro: ${f.lastActionText} (BRT)*\n\n` : '\n') +
-                `⛵ **Para SAIR (OFF):** falta **${formatDuration(nextTs - now)}** — às **${formatBrasiliaHHMM(nextTs)}** (<t:${nextDiscordTs}:R>)\n` +
-                `🪙 **Para ENTRAR novamente (ON):** falta **${formatDuration(followingTs - now)}** — às **${formatBrasiliaHHMM(followingTs)}** (<t:${followingDiscordTs}:R>)`
-            );
-    } else {
+    if (f.status === 'OFF') {
         embed
             .setColor('#e74c3c')
             .setDescription(
-                `**Status:** 🔴 **GOLD SELLER OFF (Fora da Ilha)**\n` +
-                (f.lastActionText ? `🕒 *Último registro: ${f.lastActionText} (BRT)*\n\n` : '\n') +
-                `🪙 **Para ENTRAR (ON):** falta **${formatDuration(nextTs - now)}** — às **${formatBrasiliaHHMM(nextTs)}** (<t:${nextDiscordTs}:R>)\n` +
-                `⛵ **Para SAIR depois (OFF):** falta **${formatDuration(followingTs - now)}** — às **${formatBrasiliaHHMM(followingTs)}** (<t:${followingDiscordTs}:R>)`
+                `Status: 🔴 **OFF**\n` +
+                `🕒 Último registro: Saiu às <t:${lastDiscordTs}:T>\n\n` +
+                `🪙 falta **${formatDuration(nextTs - now)}** para ser reativado — às <t:${nextDiscordTs}:t> (<t:${nextDiscordTs}:R>)\n` +
+                `⛵ **Prox (OFF):** falta **${formatDuration(followingTs - now)}** — às <t:${followingDiscordTs}:t> (<t:${followingDiscordTs}:R>)`
+            );
+    } else {
+        embed
+            .setColor('#2ecc71')
+            .setDescription(
+                `Status: 🟢 **ON**\n` +
+                `🕒 Último registro: Entrou às <t:${lastDiscordTs}:T>\n\n` +
+                `⛵ falta **${formatDuration(nextTs - now)}** para desativar (OFF) — às <t:${nextDiscordTs}:t> (<t:${nextDiscordTs}:R>)\n` +
+                `🪙 **Prox (ON):** falta **${formatDuration(followingTs - now)}** — às <t:${followingDiscordTs}:t> (<t:${followingDiscordTs}:R>)`
             );
     }
 
     return embed;
 }
 
-function buildPacksEmbed() {
-    const p = state.packs;
-    const embed = new EmbedBuilder().setTitle('🌿 Packs — Alerta no PV & Gestor(a)');
-    const now = Date.now();
-
-    let timerLine = '⚪ **Timer:** Sem timer ativo.';
-    if (p.finishTime) {
-        const ts = Math.floor(p.finishTime / 1000);
-        if (now >= p.finishTime) {
-            embed.setColor('#e74c3c');
-            timerLine = `✅ **PACKS PRONTOS PARA COLHER!** (<t:${ts}:R>)`;
-        } else {
-            embed.setColor('#2ecc71');
-            timerLine = `⏳ **Falta:** **${formatDuration(p.finishTime - now)}** (<t:${ts}:R>)\n📅 **Prontos em:** <t:${ts}:f>`;
-        }
-    } else {
-        embed.setColor('#3498db');
-    }
-
-    const managerText = p.manager ? getMention(p.manager) : '*Não definido*';
-    const recipientsText = p.recipients.length > 0
-        ? p.recipients.map(k => getMention(k)).join(', ')
-        : '*Ninguém selecionado*';
-
-    embed.setDescription(
-        `${timerLine}\n\n` +
-        `👑 **Gestor(a) (botão Replantei 3d):** ${managerText}\n` +
-        `📩 **Recebem alerta no PV:** ${recipientsText}`
-    );
-
-    return embed;
-}
-
-function buildWardrobeEmbed() {
-    const entries = Object.entries(state.wardrobe);
-    const activeLines = [];
-    const now = Date.now();
-
-    for (const [userId, data] of entries) {
-        const parts = [];
-        if (data.costumeFinishTime) {
-            const cTs = Math.floor(data.costumeFinishTime / 1000);
-            parts.push(now >= data.costumeFinishTime ? 'Costume: **EXPIRADO**' : `Costume: <t:${cTs}:R>`);
-        }
-        if (data.undergarmentFinishTime) {
-            const uTs = Math.floor(data.undergarmentFinishTime / 1000);
-            parts.push(now >= data.undergarmentFinishTime ? 'Undergarment: **EXPIRADO**' : `Under: <t:${uTs}:R>`);
-        }
-        if (parts.length > 0) {
-            activeLines.push(`• <@${userId}>: ${parts.join(' | ')}`);
-        }
-    }
-
-    const preview = activeLines.length > 0
-        ? `\n\n**Timers ativos (${activeLines.length}):**\n${activeLines.slice(0, 12).join('\n')}${activeLines.length > 12 ? `\n*...e mais ${activeLines.length - 12}*` : ''}`
-        : '\n\n*Nenhum timer configurado ainda — clique abaixo para cadastrar o seu!*';
-
-    return new EmbedBuilder()
-        .setTitle('👘 Costume & Undergarment (Aviso no PV — 30 Dias)')
-        .setColor('#9b59b6')
-        .setDescription(
-            'Qualquer pessoa pode cadastrar o tempo restante do seu **Costume** e/ou **Undergarment**.\n' +
-            'Quando expirar, o bot avisa no seu **PV** com os botões de lavar (renova por **30 dias**).' +
-            preview
-        );
-}
-
-function buildPanelComponents() {
+function buildPanelPayload() {
     const isMia = state.freedich.status === 'MIA' || !state.freedich.nextChangeTime;
 
-    const rowFreedich = new ActionRowBuilder().addComponents(
+    const rowMain = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId('freedich_mia')
             .setLabel('❓ MIA')
@@ -457,45 +395,20 @@ function buildPanelComponents() {
             .setCustomId('freedich_add_timer')
             .setLabel('➕ Adicionar Timer')
             .setStyle(ButtonStyle.Success)
-            .setDisabled(!isMia)
+            .setDisabled(!isMia),
+        new ButtonBuilder()
+            .setCustomId('wardrobe_menu')
+            .setLabel('👘 Costume / Undergarment')
+            .setStyle(ButtonStyle.Primary)
     );
 
-    const rowPacks = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId('packs_replant')
-            .setLabel('🌱 Replantei (3 Dias)')
-            .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-            .setCustomId('packs_set_time')
-            .setLabel('⏱️ Definir Tempo Packs')
-            .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-            .setCustomId('packs_menu')
-            .setLabel('⚙️ Configurar Packs (PV / Gestor)')
-            .setStyle(ButtonStyle.Secondary)
-    );
-
-    const rowWardrobe = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId('wardrobe_open_modal')
-            .setLabel('👘 Configurar Costume / Undergarment')
-            .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-            .setCustomId('wardrobe_my_status')
-            .setLabel('🧼 Meu Costume / Lavei (30d)')
-            .setStyle(ButtonStyle.Secondary)
-    );
-
-    return [rowFreedich, rowPacks, rowWardrobe];
-}
-
-function buildPanelPayload() {
     return {
-        embeds: [buildFreedichEmbed(), buildPacksEmbed(), buildWardrobeEmbed()],
-        components: buildPanelComponents()
+        embeds: [buildFreedichEmbed()],
+        components: [rowMain]
     };
 }
 
+// ===== COSTUME & UNDERGARMENT (EPHEMERAL + DM) =====
 function buildWardrobeWashButtons() {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -513,6 +426,62 @@ function buildWardrobeWashButtons() {
     );
 }
 
+function buildWardrobeMenuPayload(userId, notice = '') {
+    const data = state.wardrobe[userId];
+    const now = Date.now();
+    let statusText = 'Você ainda não cadastrou nenhum timer de **Costume** ou **Undergarment**.';
+
+    if (data && (data.costumeFinishTime || data.undergarmentFinishTime)) {
+        const lines = [];
+        if (data.costumeFinishTime) {
+            const cTs = Math.floor(data.costumeFinishTime / 1000);
+            lines.push(
+                now >= data.costumeFinishTime
+                    ? `👘 **Costume:** ⚠️ Expirado! (<t:${cTs}:R>)`
+                    : `👘 **Costume:** falta **${formatDuration(data.costumeFinishTime - now)}** — expira em <t:${cTs}:f> (<t:${cTs}:R>)`
+            );
+        } else {
+            lines.push('👘 **Costume:** *não cadastrado*');
+        }
+
+        if (data.undergarmentFinishTime) {
+            const uTs = Math.floor(data.undergarmentFinishTime / 1000);
+            lines.push(
+                now >= data.undergarmentFinishTime
+                    ? `🩲 **Undergarment:** ⚠️ Expirado! (<t:${uTs}:R>)`
+                    : `🩲 **Undergarment:** falta **${formatDuration(data.undergarmentFinishTime - now)}** — expira em <t:${uTs}:f> (<t:${uTs}:R>)`
+            );
+        } else {
+            lines.push('🩲 **Undergarment:** *não cadastrado*');
+        }
+
+        statusText = lines.join('\n');
+    }
+
+    const rowActions = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId('wardrobe_open_modal')
+            .setLabel('⏱️ Definir Tempo (Costume / Under)')
+            .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+            .setCustomId('wardrobe_clear_mine')
+            .setLabel('🗑️ Desativar Meus Alertas')
+            .setStyle(ButtonStyle.Danger)
+            .setDisabled(!data || (!data.costumeFinishTime && !data.undergarmentFinishTime))
+    );
+
+    const header = notice ? `${notice}\n\n` : '';
+    return {
+        content:
+            `${header}**👘 Costume & Undergarment (Aviso no PV — 30 Dias)**\n` +
+            `Quando expirar, o bot avisa no seu **PV** com os botões de lavar.\n\n` +
+            `${statusText}`,
+        components: [rowActions, buildWardrobeWashButtons()],
+        ephemeral: true
+    };
+}
+
+// ===== PACKS (!packs EXCLUSIVO ELUDELU) =====
 function buildPacksConfigPayload() {
     const memberEntries = Object.entries(state.members);
     const rows = [];
@@ -541,7 +510,7 @@ function buildPacksConfigPayload() {
 
         const selectManager = new StringSelectMenuBuilder()
             .setCustomId('packs_select_manager')
-            .setPlaceholder('Escolha a pessoa GESTORA (botão Replantei)')
+            .setPlaceholder('Escolha a pessoa GESTORA (botão Replantei no PV)')
             .setMinValues(1)
             .setMaxValues(1)
             .addOptions(managerOptions);
@@ -552,7 +521,11 @@ function buildPacksConfigPayload() {
         );
     }
 
-    const memberActionRow = new ActionRowBuilder().addComponents(
+    const actionRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId('packs_set_time')
+            .setLabel('⏱️ Definir Tempo Packs')
+            .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
             .setCustomId('packs_add_member')
             .setLabel('➕ Adicionar / Editar Pessoa')
@@ -561,26 +534,51 @@ function buildPacksConfigPayload() {
             .setCustomId('packs_remove_member')
             .setLabel('🗑️ Remover Pessoa')
             .setStyle(ButtonStyle.Danger)
-            .setDisabled(memberEntries.length === 0)
+            .setDisabled(memberEntries.length === 0),
+        new ButtonBuilder()
+            .setCustomId('packs_close_menu')
+            .setLabel('❌ Fechar Menu')
+            .setStyle(ButtonStyle.Secondary)
     );
-    rows.push(memberActionRow);
+    rows.push(actionRow);
 
-    const managerText = state.packs.manager ? getMention(state.packs.manager) : '*Não definido*';
-    const recipientsText = state.packs.recipients.length > 0
-        ? state.packs.recipients.map(k => getMention(k)).join(', ')
+    const p = state.packs;
+    const now = Date.now();
+    let timerLine = '⚪ **Timer dos Packs:** Sem timer ativo.';
+    if (p.finishTime) {
+        const ts = Math.floor(p.finishTime / 1000);
+        if (now >= p.finishTime) {
+            timerLine = `✅ **Timer dos Packs:** PRONTOS PARA COLHER! (<t:${ts}:R>)`;
+        } else {
+            timerLine = `⏳ **Timer dos Packs:** falta **${formatDuration(p.finishTime - now)}** — prontos em <t:${ts}:f> (<t:${ts}:R>)`;
+        }
+    }
+
+    const managerText = p.manager ? getMention(p.manager) : '*Não definido*';
+    const recipientsText = p.recipients.length > 0
+        ? p.recipients.map(k => getMention(k)).join(', ')
         : '*Ninguém*';
 
     return {
         content:
-            `**⚙️ Configuração de Packs (salvo automaticamente)**\n` +
-            `👑 **Gestor(a):** ${managerText}\n` +
+            `**⚙️ Configuração de Packs (Exclusivo EluDelu)**\n` +
+            `${timerLine}\n` +
+            `👑 **Gestor(a) (recebe botão Replantei no PV):** ${managerText}\n` +
             `📩 **Recebem alerta no PV:** ${recipientsText}`,
-        components: rows,
-        ephemeral: true
+        components: rows
     };
 }
 
-// ===== GESTÃO DO PAINEL COMO ÚLTIMA MENSAGEM =====
+// ===== GESTÃO DE MENSAGENS DO CANAL (ZERO SPAM + PAINEL SEMPRE POR ÚLTIMO) =====
+async function deleteLastAlertMessage(channel) {
+    if (!state.lastAlertMessageId || !channel) return;
+    try {
+        const alertMsg = await channel.messages.fetch(state.lastAlertMessageId).catch(() => null);
+        if (alertMsg) await alertMsg.delete().catch(() => null);
+    } catch (e) {}
+    state.lastAlertMessageId = null;
+}
+
 async function sendNewPanel(channel) {
     const sentMessage = await channel.send(buildPanelPayload());
 
@@ -590,6 +588,23 @@ async function sendNewPanel(channel) {
             if (oldMsg) await oldMsg.delete().catch(() => null);
         } catch (e) {}
     }
+
+    // Remove quaisquer mensagens antigas do próprio bot que não sejam o painel novo, o alerta ativo ou o menu !packs aberto
+    try {
+        const recent = await channel.messages.fetch({ limit: 15 }).catch(() => null);
+        if (recent) {
+            for (const msg of recent.values()) {
+                if (
+                    msg.author.id === client.user.id &&
+                    msg.id !== sentMessage.id &&
+                    msg.id !== state.lastAlertMessageId &&
+                    msg.id !== state.packsMenuMessageId
+                ) {
+                    await msg.delete().catch(() => null);
+                }
+            }
+        }
+    } catch (e) {}
 
     state.panelChannelId = sentMessage.channel.id;
     state.panelMessageId = sentMessage.id;
@@ -652,38 +667,42 @@ async function runChecks() {
     let changed = false;
     let shouldResendPanel = false;
 
-    // 1. Freedich Gold Seller (2h ON / 2h OFF)
+    // 1. Freedich Gold Trader (2h ON / 2h OFF)
     const freedichEvents = advanceFreedichCycle(now);
     if (freedichEvents.length > 0) {
         changed = true;
         if (state.panelChannelId) {
             const channel = await client.channels.fetch(state.panelChannelId).catch(() => null);
             if (channel) {
-                for (const ev of freedichEvents) {
-                    const horaEvento = formatBrasiliaHHMM(ev.changedAt);
-                    const horaProximo = formatBrasiliaHHMM(ev.nextAt);
-                    const nextTs = Math.floor(ev.nextAt / 1000);
+                await deleteLastAlertMessage(channel);
 
-                    if (ev.status === 'ON') {
-                        await channel.send(
-                            `🪙 **FREEDICH GOLD SELLER ON!**\n` +
-                            `O Merchant de Gold **ENTROU** na ilha às **${horaEvento}** (Brasília)!\n` +
-                            `Ele fica ativo por 2h e sai às **${horaProximo}** (<t:${nextTs}:R>).`
-                        ).catch(() => null);
-                    } else {
-                        await channel.send(
-                            `⛵ **FREEDICH GOLD SELLER OFF!**\n` +
-                            `O Merchant de Gold **SAIU** da ilha às **${horaEvento}** (Brasília)!\n` +
-                            `Ele fica fora por 2h e volta às **${horaProximo}** (<t:${nextTs}:R>).`
-                        ).catch(() => null);
-                    }
+                const latestEvent = freedichEvents[freedichEvents.length - 1];
+                const changedUnix = Math.floor(latestEvent.changedAt / 1000);
+                const nextUnix = Math.floor(latestEvent.nextAt / 1000);
+
+                let alertText = '';
+                if (latestEvent.status === 'ON') {
+                    alertText =
+                        `🪙 **FREEDICH GOLD TRADER ON!**\n` +
+                        `O Gold Trader **ENTROU** na ilha às <t:${changedUnix}:T>!\n` +
+                        `Ele fica ativo por 2h e sai às <t:${nextUnix}:t> (<t:${nextUnix}:R>).`;
+                } else {
+                    alertText =
+                        `⛵ **FREEDICH GOLD TRADER OFF!**\n` +
+                        `O Gold Trader **SAIU** da ilha às <t:${changedUnix}:T>!\n` +
+                        `Ele fica fora por 2h e volta às <t:${nextUnix}:t> (<t:${nextUnix}:R>).`;
+                }
+
+                const sentAlert = await channel.send(alertText).catch(() => null);
+                if (sentAlert) {
+                    state.lastAlertMessageId = sentAlert.id;
                 }
                 shouldResendPanel = true;
             }
         }
     }
 
-    // 2. Packs prontos (alerta no PV + botão Replantei para a gestora)
+    // 2. Packs prontos (alerta no PV + botão Replantei SOMENTE no PV do Gestor)
     if (state.packs.finishTime && now >= state.packs.finishTime && !state.packs.notified) {
         state.packs.notified = true;
         changed = true;
@@ -761,7 +780,7 @@ async function runChecks() {
 
     if (shouldResendPanel) {
         await updatePanel(true);
-    } else if (changed || state.freedich.status !== 'MIA' || state.packs.finishTime) {
+    } else if (state.freedich.status !== 'MIA' || changed) {
         await updatePanel(false);
     }
 }
@@ -783,9 +802,27 @@ client.once('ready', async () => {
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    if (message.content.trim() === '!painel' && message.guild) {
-        await sendNewPanel(message.channel);
+    const text = message.content.trim();
+
+    if (text === '!painel' && message.guild) {
         if (message.deletable) await message.delete().catch(() => null);
+        await sendNewPanel(message.channel);
+        return;
+    }
+
+    if (text === '!packs' && message.guild) {
+        if (message.deletable) await message.delete().catch(() => null);
+        if (message.author.id !== ELU_USER_ID) return;
+
+        if (state.packsMenuMessageId) {
+            const oldMenu = await message.channel.messages.fetch(state.packsMenuMessageId).catch(() => null);
+            if (oldMenu) await oldMenu.delete().catch(() => null);
+            state.packsMenuMessageId = null;
+        }
+
+        const sentMenu = await message.channel.send(buildPacksConfigPayload());
+        state.packsMenuMessageId = sentMenu.id;
+        await saveData();
         return;
     }
 
@@ -795,13 +832,24 @@ client.on('messageCreate', async (message) => {
 });
 
 // ===== HELPERS DE INTERAÇÃO =====
+function requireElu(interaction) {
+    if (interaction.user.id !== ELU_USER_ID) {
+        interaction.reply({
+            content: '🚫 Apenas o EluDelu pode usar a configuração de Packs.',
+            ephemeral: true
+        }).catch(() => null);
+        return false;
+    }
+    return true;
+}
+
 async function handlePacksReplant(interaction) {
     const managerMember = state.packs.manager ? getMember(state.packs.manager) : null;
     const isDesignatedManager = Boolean(managerMember && managerMember.id === interaction.user.id);
 
-    if (!isDesignatedManager && !isAdmin(interaction)) {
+    if (!isDesignatedManager && interaction.user.id !== ELU_USER_ID && !isAdmin(interaction)) {
         return interaction.reply({
-            content: `🚫 Apenas o(a) Gestor(a) (${managerMember ? managerMember.name : 'não definido'}) ou Administrador pode clicar em **Replantei**!`,
+            content: `🚫 Apenas o(a) Gestor(a) (${managerMember ? managerMember.name : 'não definido'}) pode clicar em **Replantei**!`,
             ephemeral: true
         });
     }
@@ -812,28 +860,25 @@ async function handlePacksReplant(interaction) {
 
     const ts = Math.floor(state.packs.finishTime / 1000);
 
-    if (interaction.guild) {
-        await interaction.reply({
-            content: `🌱 **Packs replantados!** Novo timer iniciado para **3 dias** (prontos em <t:${ts}:f>).`,
-            ephemeral: true
+    if (!interaction.guild && interaction.message?.author?.id === client.user.id) {
+        await interaction.update({
+            content: `🌱 **Packs replantados!** Timer resetado para **3 dias** (<t:${ts}:f> — <t:${ts}:R>).`,
+            components: []
         });
     } else {
-        await interaction.update({
-            content: `🌱 **Packs replantados!** Timer resetado para **3 dias** (prontos em <t:${ts}:f>).`,
-            components: []
+        await interaction.reply({
+            content: `🌱 **Packs replantados!** Timer resetado para **3 dias** (<t:${ts}:f> — <t:${ts}:R>).`,
+            ephemeral: true
         });
     }
 
-    // Notifica os destinatários no PV que os packs foram replantados
     for (const key of state.packs.recipients) {
         const m = getMember(key);
         if (!m || !m.id || m.id === interaction.user.id) continue;
         await sendDMByUserId(m.id, {
-            content: `🌱 **${interaction.user.username}** clicou em **Replantei**! Os próximos packs ficarão prontos em **3 dias** (<t:${ts}:f>).`
+            content: `🌱 **${interaction.user.username}** clicou em **Replantei**! Os próximos packs ficarão prontos em **3 dias** (<t:${ts}:f> — <t:${ts}:R>).`
         });
     }
-
-    await updatePanel(true);
 }
 
 async function handleWardrobeWash(interaction, mode) {
@@ -856,21 +901,21 @@ async function handleWardrobeWash(interaction, mode) {
         existing.costumeNotified = false;
         existing.undergarmentFinishTime = newFinish;
         existing.undergarmentNotified = false;
-        msg = `🧼 **Costume e Undergarment lavados!** Ambos renovados para **30 dias** (<t:${newTs}:f>).`;
+        msg = `🧼 **Costume e Undergarment lavados!** Ambos renovados para **30 dias** (<t:${newTs}:f> — <t:${newTs}:R>).`;
     } else if (mode === 'costume') {
         existing.costumeFinishTime = newFinish;
         existing.costumeNotified = false;
         const underInfo = existing.undergarmentFinishTime
             ? `\n🩲 Seu **Undergarment** continua para <t:${Math.floor(existing.undergarmentFinishTime / 1000)}:R>.`
             : '';
-        msg = `👘 **Apenas Costume lavado!** Renovado para **30 dias** (<t:${newTs}:f>).${underInfo}`;
+        msg = `👘 **Apenas Costume lavado!** Renovado para **30 dias** (<t:${newTs}:f> — <t:${newTs}:R>).${underInfo}`;
     } else if (mode === 'under') {
         existing.undergarmentFinishTime = newFinish;
         existing.undergarmentNotified = false;
         const costumeInfo = existing.costumeFinishTime
             ? `\n👘 Seu **Costume** continua para <t:${Math.floor(existing.costumeFinishTime / 1000)}:R>.`
             : '';
-        msg = `🩲 **Apenas Undergarment lavado!** Renovado para **30 dias** (<t:${newTs}:f>).${costumeInfo}`;
+        msg = `🩲 **Apenas Undergarment lavado!** Renovado para **30 dias** (<t:${newTs}:f> — <t:${newTs}:R>).${costumeInfo}`;
     }
 
     state.wardrobe[userId] = existing;
@@ -879,10 +924,8 @@ async function handleWardrobeWash(interaction, mode) {
     if (!interaction.guild && interaction.message?.author?.id === client.user.id) {
         await interaction.update({ content: msg, components: [] });
     } else {
-        await interaction.reply({ content: msg, ephemeral: true });
+        await interaction.update(buildWardrobeMenuPayload(userId, msg));
     }
-
-    await updatePanel(false);
 }
 
 // ===== INTERAÇÕES =====
@@ -896,7 +939,13 @@ client.on('interactionCreate', async (interaction) => {
             if (customId === 'freedich_mia') {
                 state.freedich.status = 'MIA';
                 state.freedich.nextChangeTime = null;
-                state.freedich.lastActionText = null;
+                state.freedich.lastActionTime = null;
+
+                if (state.panelChannelId) {
+                    const ch = await client.channels.fetch(state.panelChannelId).catch(() => null);
+                    if (ch) await deleteLastAlertMessage(ch);
+                }
+
                 await saveData();
                 await interaction.reply({
                     content: '⚪ Timer do Freedich marcado como **MIA**. O botão **➕ Adicionar Timer** foi liberado!',
@@ -910,7 +959,7 @@ client.on('interactionCreate', async (interaction) => {
             if (customId === 'freedich_add_timer') {
                 const modal = new ModalBuilder()
                     .setCustomId('modal_freedich_timer')
-                    .setTitle('Freedich Gold Seller (Horário Brasília)');
+                    .setTitle('Freedich Gold Trader (Brasília)');
 
                 modal.addComponents(
                     new ActionRowBuilder().addComponents(
@@ -935,14 +984,15 @@ client.on('interactionCreate', async (interaction) => {
                 return;
             }
 
-            // 2. Packs: Replantei
+            // 2. Packs: Replantei (apenas no PV do Gestor)
             if (customId === 'packs_replant') {
                 await handlePacksReplant(interaction);
                 return;
             }
 
-            // 2. Packs: Definir Tempo
+            // 2. Packs (!packs exclusivo EluDelu)
             if (customId === 'packs_set_time') {
+                if (!requireElu(interaction)) return;
                 const modal = new ModalBuilder()
                     .setCustomId('modal_packs_time')
                     .setTitle('Tempo dos Packs');
@@ -962,14 +1012,8 @@ client.on('interactionCreate', async (interaction) => {
                 return;
             }
 
-            // 2. Packs: Abrir Menu de Configuração
-            if (customId === 'packs_menu') {
-                await interaction.reply(buildPacksConfigPayload());
-                return;
-            }
-
-            // 2. Packs: Adicionar / Editar Pessoa
             if (customId === 'packs_add_member') {
+                if (!requireElu(interaction)) return;
                 const modal = new ModalBuilder()
                     .setCustomId('modal_packs_add_member')
                     .setTitle('Adicionar / Editar Pessoa (Packs)');
@@ -997,8 +1041,8 @@ client.on('interactionCreate', async (interaction) => {
                 return;
             }
 
-            // 2. Packs: Remover Pessoa
             if (customId === 'packs_remove_member') {
+                if (!requireElu(interaction)) return;
                 const entries = Object.entries(state.members);
                 if (entries.length === 0) {
                     return interaction.reply({ content: '⚠️ Nenhuma pessoa cadastrada.', ephemeral: true });
@@ -1023,7 +1067,21 @@ client.on('interactionCreate', async (interaction) => {
                 return;
             }
 
-            // 3. Wardrobe: Abrir Modal de Cadastro
+            if (customId === 'packs_close_menu') {
+                if (!requireElu(interaction)) return;
+                state.packsMenuMessageId = null;
+                await saveData();
+                await interaction.message.delete().catch(() => null);
+                await updatePanel(true);
+                return;
+            }
+
+            // 3. Wardrobe: Menu Ephemeral individual (ao lado de Adicionar Timer)
+            if (customId === 'wardrobe_menu') {
+                await interaction.reply(buildWardrobeMenuPayload(interaction.user.id));
+                return;
+            }
+
             if (customId === 'wardrobe_open_modal') {
                 const modal = new ModalBuilder()
                     .setCustomId('modal_wardrobe_time')
@@ -1052,54 +1110,6 @@ client.on('interactionCreate', async (interaction) => {
                 return;
             }
 
-            // 3. Wardrobe: Meu Status / Lavei
-            if (customId === 'wardrobe_my_status') {
-                const data = state.wardrobe[interaction.user.id];
-                const now = Date.now();
-                let statusText = 'Você ainda não cadastrou nenhum timer de Costume ou Undergarment.';
-
-                if (data && (data.costumeFinishTime || data.undergarmentFinishTime)) {
-                    const lines = [];
-                    if (data.costumeFinishTime) {
-                        const cTs = Math.floor(data.costumeFinishTime / 1000);
-                        lines.push(
-                            now >= data.costumeFinishTime
-                                ? '👘 **Costume:** ⚠️ Expirado!'
-                                : `👘 **Costume:** falta **${formatDuration(data.costumeFinishTime - now)}** (<t:${cTs}:f>)`
-                        );
-                    } else {
-                        lines.push('👘 **Costume:** *não cadastrado*');
-                    }
-
-                    if (data.undergarmentFinishTime) {
-                        const uTs = Math.floor(data.undergarmentFinishTime / 1000);
-                        lines.push(
-                            now >= data.undergarmentFinishTime
-                                ? '🩲 **Undergarment:** ⚠️ Expirado!'
-                                : `🩲 **Undergarment:** falta **${formatDuration(data.undergarmentFinishTime - now)}** (<t:${uTs}:f>)`
-                        );
-                    } else {
-                        lines.push('🩲 **Undergarment:** *não cadastrado*');
-                    }
-                    statusText = lines.join('\n');
-                }
-
-                const clearRow = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('wardrobe_clear_mine')
-                        .setLabel('🗑️ Desativar Meus Alertas')
-                        .setStyle(ButtonStyle.Danger)
-                );
-
-                await interaction.reply({
-                    content: `**🧼 Seus Timers (Costume & Undergarment)**\n\n${statusText}\n\nClique abaixo caso já tenha lavado (renova para **30 dias**):`,
-                    components: [buildWardrobeWashButtons(), clearRow],
-                    ephemeral: true
-                });
-                return;
-            }
-
-            // 3. Wardrobe: Botões de Lavei (30 dias)
             if (customId === 'wardrobe_wash_both') {
                 await handleWardrobeWash(interaction, 'both');
                 return;
@@ -1113,15 +1123,12 @@ client.on('interactionCreate', async (interaction) => {
                 return;
             }
 
-            // 3. Wardrobe: Limpar alertas do usuário
             if (customId === 'wardrobe_clear_mine') {
                 delete state.wardrobe[interaction.user.id];
                 await saveData();
-                await interaction.update({
-                    content: '🗑️ Seus alertas de Costume e Undergarment foram removidos.',
-                    components: []
-                });
-                await updatePanel(false);
+                await interaction.update(
+                    buildWardrobeMenuPayload(interaction.user.id, '🗑️ Seus alertas de Costume e Undergarment foram removidos.')
+                );
                 return;
             }
         }
@@ -1131,25 +1138,26 @@ client.on('interactionCreate', async (interaction) => {
             const { customId } = interaction;
 
             if (customId === 'packs_select_recipients') {
+                if (!requireElu(interaction)) return;
                 state.packs.recipients = interaction.values.filter(k => state.members[k]);
                 await saveData();
                 await interaction.update(buildPacksConfigPayload());
-                await updatePanel(false);
                 return;
             }
 
             if (customId === 'packs_select_manager') {
+                if (!requireElu(interaction)) return;
                 const chosen = interaction.values[0];
                 if (state.members[chosen]) {
                     state.packs.manager = chosen;
                     await saveData();
                 }
                 await interaction.update(buildPacksConfigPayload());
-                await updatePanel(false);
                 return;
             }
 
             if (customId === 'packs_select_remove_member') {
+                if (!requireElu(interaction)) return;
                 const key = interaction.values[0];
                 const removedName = state.members[key]?.name || key;
                 delete state.members[key];
@@ -1159,11 +1167,16 @@ client.on('interactionCreate', async (interaction) => {
                     state.packs.manager = remainingKeys[0] || null;
                 }
                 await saveData();
+
+                if (state.packsMenuMessageId && interaction.channel) {
+                    const menuMsg = await interaction.channel.messages.fetch(state.packsMenuMessageId).catch(() => null);
+                    if (menuMsg) await menuMsg.edit(buildPacksConfigPayload()).catch(() => null);
+                }
+
                 await interaction.update({
                     content: `🗑️ **${removedName}** removido(a) da lista de Packs.`,
                     components: []
                 });
-                await updatePanel(false);
                 return;
             }
         }
@@ -1195,25 +1208,32 @@ client.on('interactionCreate', async (interaction) => {
                 }
 
                 state.freedich.status = isEntrou ? 'ON' : 'OFF';
+                state.freedich.lastActionTime = eventTs;
                 state.freedich.nextChangeTime = eventTs + TWO_HOURS_MS;
-                state.freedich.lastActionText = `${isEntrou ? 'Entrou' : 'Saiu'} às ${formatBrasiliaHHMM(eventTs)}`;
 
-                // Se já passaram blocos de 2h desde o horário informado, sincroniza com o estado atual
                 advanceFreedichCycle(Date.now());
+
+                if (state.panelChannelId) {
+                    const ch = await client.channels.fetch(state.panelChannelId).catch(() => null);
+                    if (ch) await deleteLastAlertMessage(ch);
+                }
+
                 await saveData();
 
                 const nextTs = state.freedich.nextChangeTime;
                 const followingTs = nextTs + TWO_HOURS_MS;
-                const statusLabel = state.freedich.status === 'ON' ? '🟢 **ON (Na Ilha)**' : '🔴 **OFF (Fora da Ilha)**';
-                const nextAction = state.freedich.status === 'ON' ? 'sai' : 'entra';
-                const followingAction = state.freedich.status === 'ON' ? 'entra novamente' : 'sai novamente';
+                const nextUnix = Math.floor(nextTs / 1000);
+                const followingUnix = Math.floor(followingTs / 1000);
+                const statusLabel = state.freedich.status === 'ON' ? '🟢 **ON**' : '🔴 **OFF**';
+                const nextAction = state.freedich.status === 'ON' ? 'desativa (OFF)' : 'reativa (ON)';
+                const followingAction = state.freedich.status === 'ON' ? 'reativa (ON)' : 'desativa (OFF)';
 
                 await interaction.reply({
                     content:
                         `✅ **Timer do Freedich configurado!**\n` +
-                        `Estado atual: ${statusLabel}\n` +
-                        `Próximo evento: ${nextAction} às **${formatBrasiliaHHMM(nextTs)}** (<t:${Math.floor(nextTs / 1000)}:R>)\n` +
-                        `Depois disso: ${followingAction} às **${formatBrasiliaHHMM(followingTs)}**`,
+                        `Status atual: ${statusLabel}\n` +
+                        `Próximo evento: ${nextAction} às <t:${nextUnix}:t> (<t:${nextUnix}:R>)\n` +
+                        `Depois disso: ${followingAction} às <t:${followingUnix}:t> (<t:${followingUnix}:R>)`,
                     ephemeral: true
                 });
 
@@ -1221,8 +1241,9 @@ client.on('interactionCreate', async (interaction) => {
                 return;
             }
 
-            // 2. Packs Time Modal
+            // 2. Packs Time Modal (!packs exclusivo EluDelu)
             if (customId === 'modal_packs_time') {
+                if (!requireElu(interaction)) return;
                 const rawDhm = interaction.fields.getTextInputValue('input_packs_dhm').trim();
                 const ms = parseDHM(rawDhm);
 
@@ -1237,18 +1258,22 @@ client.on('interactionCreate', async (interaction) => {
                 state.packs.notified = false;
                 await saveData();
 
+                if (state.packsMenuMessageId && interaction.channel) {
+                    const menuMsg = await interaction.channel.messages.fetch(state.packsMenuMessageId).catch(() => null);
+                    if (menuMsg) await menuMsg.edit(buildPacksConfigPayload()).catch(() => null);
+                }
+
                 const ts = Math.floor(state.packs.finishTime / 1000);
                 await interaction.reply({
-                    content: `⏱️ **Timer dos Packs definido!** Falta **${formatDuration(ms)}** (prontos em <t:${ts}:f>).`,
+                    content: `⏱️ **Timer dos Packs definido!** Falta **${formatDuration(ms)}** — prontos em <t:${ts}:f> (<t:${ts}:R>).`,
                     ephemeral: true
                 });
-
-                await updatePanel(true);
                 return;
             }
 
-            // 2. Packs Add/Edit Member Modal
+            // 2. Packs Add/Edit Member Modal (!packs exclusivo EluDelu)
             if (customId === 'modal_packs_add_member') {
+                if (!requireElu(interaction)) return;
                 const name = interaction.fields.getTextInputValue('input_member_name').trim();
                 const rawId = interaction.fields.getTextInputValue('input_member_id').trim();
                 const idMatch = rawId.match(/\d{17,20}/);
@@ -1269,11 +1294,15 @@ client.on('interactionCreate', async (interaction) => {
                 state.members[existingKey] = { name, id: discordId };
                 await saveData();
 
+                if (state.packsMenuMessageId && interaction.channel) {
+                    const menuMsg = await interaction.channel.messages.fetch(state.packsMenuMessageId).catch(() => null);
+                    if (menuMsg) await menuMsg.edit(buildPacksConfigPayload()).catch(() => null);
+                }
+
                 await interaction.reply({
-                    content: `✅ Pessoa **${name}** (<@${discordId}>) salva! Agora você pode selecioná-la no menu ⚙️ Configurar Packs.`,
+                    content: `✅ Pessoa **${name}** (<@${discordId}>) salva! Agora você pode selecioná-la nos menus acima.`,
                     ephemeral: true
                 });
-                await updatePanel(false);
                 return;
             }
 
@@ -1322,13 +1351,13 @@ client.on('interactionCreate', async (interaction) => {
                     entry.costumeFinishTime = now + costumeMs;
                     entry.costumeNotified = false;
                     const cTs = Math.floor(entry.costumeFinishTime / 1000);
-                    summaryLines.push(`👘 **Costume:** expira em **${formatDuration(costumeMs)}** (<t:${cTs}:f>)`);
+                    summaryLines.push(`👘 **Costume:** expira em **${formatDuration(costumeMs)}** (<t:${cTs}:f> — <t:${cTs}:R>)`);
                 }
                 if (underMs) {
                     entry.undergarmentFinishTime = now + underMs;
                     entry.undergarmentNotified = false;
                     const uTs = Math.floor(entry.undergarmentFinishTime / 1000);
-                    summaryLines.push(`🩲 **Undergarment:** expira em **${formatDuration(underMs)}** (<t:${uTs}:f>)`);
+                    summaryLines.push(`🩲 **Undergarment:** expira em **${formatDuration(underMs)}** (<t:${uTs}:f> — <t:${uTs}:R>)`);
                 }
 
                 state.wardrobe[userId] = entry;
@@ -1350,8 +1379,6 @@ client.on('interactionCreate', async (interaction) => {
                     content: `✅ **Timers salvos!**\n${summaryLines.join('\n')}\n\n${dmWarning}`,
                     ephemeral: true
                 });
-
-                await updatePanel(false);
                 return;
             }
         }
