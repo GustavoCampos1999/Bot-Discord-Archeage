@@ -12,6 +12,16 @@ const {
     TextInputBuilder,
     TextInputStyle
 } = require('discord.js');
+const {
+    joinVoiceChannel,
+    entersState,
+    VoiceConnectionStatus,
+    createAudioPlayer,
+    createAudioResource,
+    AudioPlayerStatus,
+    StreamType,
+    NoSubscriberBehavior
+} = require('@discordjs/voice');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -28,7 +38,8 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.DirectMessages
+        GatewayIntentBits.DirectMessages,
+        GatewayIntentBits.GuildVoiceStates
     ],
     partials: [Partials.Channel]
 });
@@ -49,7 +60,7 @@ const JSONBIN_BIN_ID = process.env.JSONBIN_BIN_ID || '';
 const USE_JSONBIN = JSONBIN_KEY !== '' && JSONBIN_BIN_ID !== '';
 
 // ===== [TEMPORÁRIO - FÁCIL DE REMOVER] TROLL AMIGOS =====
-const TROLL_COOLDOWN_MS = 30 * 1000; // 30 segundos para todos
+const TROLL_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutos para todos
 let trollEnabled = true; // Mude para false (ou use !troll no Discord) para desativar
 const trollLastTimeByUser = {};
 
@@ -81,6 +92,78 @@ async function handleTrollAmigo(message) {
 
     trollLastTimeByUser[message.author.id] = now;
     await message.channel.send(payload).catch(err => console.error('Erro ao enviar troll:', err.message));
+}
+
+const TROLL_VOICE_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutos
+const trollVoiceLastTimeByUser = {};
+const voiceTrollBusyGuilds = new Set();
+
+// Usuários que acionam áudio local ao entrar em canal de voz (cooldown de 30min por usuário):
+const TROLL_VOICE_TARGETS = {
+    '275466111376687104': { audioFile: path.join(__dirname, '1535432241113469058.ogg') },
+    '237228450455224321': { audioFile: path.join(__dirname, '1535432241113469058.ogg') }
+};
+
+async function handleVoiceTroll(oldState, newState) {
+    if (!trollEnabled) return;
+    const userId = newState.id;
+    const target = TROLL_VOICE_TARGETS[userId];
+    if (!target || !target.audioFile || !fs.existsSync(target.audioFile)) return;
+
+    // Só dispara quando entra em um canal de voz (ou troca de canal)
+    if (!newState.channelId || oldState.channelId === newState.channelId) return;
+
+    const channel = newState.channel;
+    if (!channel || !channel.joinable) return;
+
+    const now = Date.now();
+    const lastTime = trollVoiceLastTimeByUser[userId] || 0;
+    if (now - lastTime < TROLL_VOICE_COOLDOWN_MS) return;
+
+    const guildId = channel.guild.id;
+    if (voiceTrollBusyGuilds.has(guildId)) return;
+    voiceTrollBusyGuilds.add(guildId);
+
+    let connection = null;
+    let player = null;
+    try {
+        connection = joinVoiceChannel({
+            channelId: channel.id,
+            guildId,
+            adapterCreator: channel.guild.voiceAdapterCreator,
+            selfDeaf: true,
+            selfMute: false
+        });
+
+        await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+        await new Promise(resolve => setTimeout(resolve, 400));
+
+        player = createAudioPlayer({
+            behaviors: { noSubscriber: NoSubscriberBehavior.Stop }
+        });
+        const resource = createAudioResource(fs.createReadStream(target.audioFile), {
+            inputType: StreamType.OggOpus
+        });
+
+        connection.subscribe(player);
+        player.play(resource);
+
+        await entersState(player, AudioPlayerStatus.Playing, 5_000);
+        trollVoiceLastTimeByUser[userId] = Date.now();
+
+        // Aguarda o áudio terminar completamente antes de sair do canal
+        await entersState(player, AudioPlayerStatus.Idle, 30_000);
+    } catch (err) {
+        console.error(`Erro ao tocar áudio troll para ${userId}:`, err.message);
+    } finally {
+        if (player) {
+            try { player.stop(true); } catch (e) {}
+        }
+        if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
+            try { connection.destroy(); } catch (e) {}
+        }
+        voiceTrollBusyGuilds.delete(guildId);
+    }
 }
 // ===== [FIM DO BLOCO TEMPORÁRIO] =====
 
@@ -901,6 +984,10 @@ client.on('messageCreate', async (message) => {
     if (state.panelChannelId === message.channel.id) {
         setTimeout(() => updatePanel(false), 1000);
     }
+});
+
+client.on('voiceStateUpdate', (oldState, newState) => {
+    handleVoiceTroll(oldState, newState).catch(err => console.error('Erro no voiceStateUpdate:', err.message));
 });
 
 // ===== HELPERS DE INTERAÇÃO =====
