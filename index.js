@@ -110,8 +110,9 @@ async function handleVoiceTroll(oldState, newState) {
     const target = TROLL_VOICE_TARGETS[userId];
     if (!target || !target.audioFile || !fs.existsSync(target.audioFile)) return;
 
-    // Só dispara quando entra em um canal de voz (ou troca de canal)
-    if (!newState.channelId || oldState.channelId === newState.channelId) return;
+    // Só dispara quando o usuário NÃO estava em nenhuma sala de voz e conectou agora (ignora troca de sala e canal AFK)
+    if (oldState.channelId || !newState.channelId) return;
+    if (newState.guild.afkChannelId && newState.channelId === newState.guild.afkChannelId) return;
 
     const channel = newState.channel;
     if (!channel || !channel.joinable) return;
