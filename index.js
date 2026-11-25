@@ -48,25 +48,39 @@ const JSONBIN_KEY = process.env.JSONBIN_KEY || '';
 const JSONBIN_BIN_ID = process.env.JSONBIN_BIN_ID || '';
 const USE_JSONBIN = JSONBIN_KEY !== '' && JSONBIN_BIN_ID !== '';
 
-// ===== [TEMPORÁRIO - FÁCIL DE REMOVER] TROLL AMIGO =====
-const TROLL_TARGET_USER_ID = '107209586880073728';
-const TROLL_COOLDOWN_MS = 60 * 1000; // 1 minuto
-const TROLL_VIDEO_PATH = path.join(__dirname, 'videoplayback.mp4');
+// ===== [TEMPORÁRIO - FÁCIL DE REMOVER] TROLL AMIGOS =====
+const TROLL_COOLDOWN_MS = 30 * 1000; // 30 segundos para todos
 let trollEnabled = true; // Mude para false (ou use !troll no Discord) para desativar
-let lastTrollTime = 0;
+const trollLastTimeByUser = {};
+
+// Adicione novos usuários aqui (cada um pode ter file e/ou text próprios):
+const TROLL_TARGETS = {
+    '107209586880073728': {
+        file: path.join(__dirname, 'videoplayback.mp4'),
+        text: null // se null, envia apenas a marcação <@id>
+    }
+};
 
 async function handleTrollAmigo(message) {
     if (!trollEnabled) return;
-    if (message.author.id !== TROLL_TARGET_USER_ID) return;
-    const now = Date.now();
-    if (now - lastTrollTime < TROLL_COOLDOWN_MS) return;
-    if (!fs.existsSync(TROLL_VIDEO_PATH)) return;
+    const target = TROLL_TARGETS[message.author.id];
+    if (!target) return;
 
-    lastTrollTime = now;
-    await message.channel.send({
-        content: `<@${TROLL_TARGET_USER_ID}>`,
-        files: [TROLL_VIDEO_PATH]
-    }).catch(err => console.error('Erro ao enviar vídeo troll:', err.message));
+    const now = Date.now();
+    const lastTime = trollLastTimeByUser[message.author.id] || 0;
+    if (now - lastTime < TROLL_COOLDOWN_MS) return;
+
+    const payload = {
+        content: target.text ? `<@${message.author.id}> ${target.text}` : `<@${message.author.id}>`
+    };
+
+    if (target.file) {
+        if (!fs.existsSync(target.file)) return;
+        payload.files = [target.file];
+    }
+
+    trollLastTimeByUser[message.author.id] = now;
+    await message.channel.send(payload).catch(err => console.error('Erro ao enviar troll:', err.message));
 }
 // ===== [FIM DO BLOCO TEMPORÁRIO] =====
 
