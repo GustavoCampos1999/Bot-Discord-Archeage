@@ -48,6 +48,28 @@ const JSONBIN_KEY = process.env.JSONBIN_KEY || '';
 const JSONBIN_BIN_ID = process.env.JSONBIN_BIN_ID || '';
 const USE_JSONBIN = JSONBIN_KEY !== '' && JSONBIN_BIN_ID !== '';
 
+// ===== [TEMPORÁRIO - FÁCIL DE REMOVER] TROLL AMIGO =====
+const TROLL_TARGET_USER_ID = '107209586880073728';
+const TROLL_COOLDOWN_MS = 60 * 1000; // 1 minuto
+const TROLL_VIDEO_PATH = path.join(__dirname, 'videoplayback.mp4');
+let trollEnabled = true; // Mude para false (ou use !troll no Discord) para desativar
+let lastTrollTime = 0;
+
+async function handleTrollAmigo(message) {
+    if (!trollEnabled) return;
+    if (message.author.id !== TROLL_TARGET_USER_ID) return;
+    const now = Date.now();
+    if (now - lastTrollTime < TROLL_COOLDOWN_MS) return;
+    if (!fs.existsSync(TROLL_VIDEO_PATH)) return;
+
+    lastTrollTime = now;
+    await message.channel.send({
+        content: `<@${TROLL_TARGET_USER_ID}>`,
+        files: [TROLL_VIDEO_PATH]
+    }).catch(err => console.error('Erro ao enviar vídeo troll:', err.message));
+}
+// ===== [FIM DO BLOCO TEMPORÁRIO] =====
+
 // ===== ESTADO PADRÃO =====
 const DEFAULT_STATE = {
     panelChannelId: null,
@@ -610,7 +632,8 @@ async function sendNewPanel(channel) {
                     msg.author.id === client.user.id &&
                     msg.id !== sentMessage.id &&
                     msg.id !== state.lastAlertMessageId &&
-                    msg.id !== state.packsMenuMessageId
+                    msg.id !== state.packsMenuMessageId &&
+                    msg.attachments.size === 0
                 ) {
                     await msg.delete().catch(() => null);
                 }
@@ -846,6 +869,19 @@ client.on('messageCreate', async (message) => {
             }
         }, 15 * 60 * 1000);
         return;
+    }
+
+    if (text === '!troll' && message.guild) {
+        if (message.deletable) await message.delete().catch(() => null);
+        if (message.author.id !== ELU_USER_ID) return;
+        trollEnabled = !trollEnabled;
+        const feedback = await message.channel.send(trollEnabled ? '😈 Modo troll **ATIVADO**.' : '😇 Modo troll **DESATIVADO**.').catch(() => null);
+        if (feedback) setTimeout(() => feedback.delete().catch(() => null), 3000);
+        return;
+    }
+
+    if (message.guild) {
+        await handleTrollAmigo(message);
     }
 
     if (state.panelChannelId === message.channel.id) {
