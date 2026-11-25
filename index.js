@@ -60,11 +60,41 @@ const JSONBIN_BIN_ID = process.env.JSONBIN_BIN_ID || '';
 const USE_JSONBIN = JSONBIN_KEY !== '' && JSONBIN_BIN_ID !== '';
 
 // ===== [TEMPORÁRIO - FÁCIL DE REMOVER] TROLL AMIGOS =====
-const TROLL_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutos para todos
 let trollEnabled = true; // Mude para false (ou use !troll no Discord) para desativar
-const trollLastTimeByUser = {};
+const trollChatTrackers = {};
+const trollVoiceTrackers = {};
+const voiceTrollBusyGuilds = new Set();
 
-// Adicione novos usuários aqui (cada um pode ter file e/ou text próprios):
+function getBrasiliaDayKey(now = Date.now()) {
+    const d = new Date(now + BRT_OFFSET_MS);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(d.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+function randomInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function getOrInitTrollTracker(map, userId, minCap, maxCap, now = Date.now()) {
+    const dayKey = getBrasiliaDayKey(now);
+    let tracker = map[userId];
+    if (!tracker || tracker.dayKey !== dayKey) {
+        tracker = {
+            dayKey,
+            countToday: 0,
+            dailyCap: randomInt(minCap, maxCap),
+            nextAllowedAt: 0,
+            misses: 0,
+            lastMissAt: 0
+        };
+        map[userId] = tracker;
+    }
+    return tracker;
+}
+
+// Adicione novos usuários aqui (1 a 3x/dia, cooldown aleatório de 2h30 a 5h, chance progressiva):
 const TROLL_TARGETS = {
     '107209586880073728': {
         file: path.join(__dirname, 'videoplayback.mp4'),
@@ -74,31 +104,42 @@ const TROLL_TARGETS = {
 
 async function handleTrollAmigo(message) {
     if (!trollEnabled) return;
-    const target = TROLL_TARGETS[message.author.id];
+    const userId = message.author.id;
+    const target = TROLL_TARGETS[userId];
     if (!target) return;
+    if (target.file && !fs.existsSync(target.file)) return;
 
     const now = Date.now();
-    const lastTime = trollLastTimeByUser[message.author.id] || 0;
-    if (now - lastTime < TROLL_COOLDOWN_MS) return;
+    const tracker = getOrInitTrollTracker(trollChatTrackers, userId, 1, 3, now);
+    if (tracker.countToday >= tracker.dailyCap || now < tracker.nextAllowedAt) return;
+
+    const chance = Math.min(1, 0.08 + tracker.misses * 0.05);
+    if (Math.random() >= chance) {
+        if (now - tracker.lastMissAt >= 15 * 1000) {
+            tracker.misses += 1;
+            tracker.lastMissAt = now;
+        }
+        return;
+    }
 
     const payload = {
-        content: target.text ? `<@${message.author.id}> ${target.text}` : `<@${message.author.id}>`
+        content: target.text ? `<@${userId}> ${target.text}` : `<@${userId}>`
     };
-
     if (target.file) {
-        if (!fs.existsSync(target.file)) return;
         payload.files = [target.file];
     }
 
-    trollLastTimeByUser[message.author.id] = now;
-    await message.channel.send(payload).catch(err => console.error('Erro ao enviar troll:', err.message));
+    try {
+        await message.channel.send(payload);
+        tracker.countToday += 1;
+        tracker.misses = 0;
+        tracker.nextAllowedAt = Date.now() + randomInt(150, 300) * 60 * 1000; // 2h30 a 5h
+    } catch (err) {
+        console.error('Erro ao enviar troll:', err.message);
+    }
 }
 
-const TROLL_VOICE_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutos
-const trollVoiceLastTimeByUser = {};
-const voiceTrollBusyGuilds = new Set();
-
-// Usuários que acionam áudio local ao entrar em canal de voz (cooldown de 30min por usuário):
+// Usuários que acionam áudio local ao conectar no chat de voz (1 a 3x/dia, cooldown 2h a 4h30, pity 45% -> 75% -> 100%):
 const TROLL_VOICE_TARGETS = {
     '275466111376687104': { audioFile: path.join(__dirname, '1535432241113469058.ogg') },
     '237228450455224321': { audioFile: path.join(__dirname, '1535432241113469058.ogg') }
@@ -118,16 +159,30 @@ async function handleVoiceTroll(oldState, newState) {
     if (!channel || !channel.joinable) return;
 
     const now = Date.now();
-    const lastTime = trollVoiceLastTimeByUser[userId] || 0;
-    if (now - lastTime < TROLL_VOICE_COOLDOWN_MS) return;
+    const tracker = getOrInitTrollTracker(trollVoiceTrackers, userId, 1, 3, now);
+    if (tracker.countToday >= tracker.dailyCap || now < tracker.nextAllowedAt) return;
 
     const guildId = channel.guild.id;
     if (voiceTrollBusyGuilds.has(guildId)) return;
+
+    const voiceChances = [0.45, 0.75, 1.0];
+    const chance = voiceChances[Math.min(tracker.misses, voiceChances.length - 1)];
+    if (Math.random() >= chance) {
+        tracker.misses += 1;
+        tracker.lastMissAt = now;
+        return;
+    }
+
     voiceTrollBusyGuilds.add(guildId);
 
     let connection = null;
     let player = null;
     try {
+        // Pequeno atraso cômico antes de entrar
+        await new Promise(resolve => setTimeout(resolve, randomInt(1500, 4000)));
+        const freshChannel = newState.guild.channels.cache.get(channel.id);
+        if (!freshChannel || !freshChannel.members.has(userId)) return;
+
         connection = joinVoiceChannel({
             channelId: channel.id,
             guildId,
@@ -150,7 +205,9 @@ async function handleVoiceTroll(oldState, newState) {
         player.play(resource);
 
         await entersState(player, AudioPlayerStatus.Playing, 5_000);
-        trollVoiceLastTimeByUser[userId] = Date.now();
+        tracker.countToday += 1;
+        tracker.misses = 0;
+        tracker.nextAllowedAt = Date.now() + randomInt(120, 270) * 60 * 1000; // 2h a 4h30
 
         // Aguarda o áudio terminar completamente antes de sair do canal
         await entersState(player, AudioPlayerStatus.Idle, 30_000);
